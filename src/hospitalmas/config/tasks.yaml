@@ -1,0 +1,159 @@
+extract_symptoms_task:
+  description: >
+    Read the raw user clinical message: "{user_message}".
+    Extract ONLY symptoms explicitly present in the text.
+    Do not infer diagnoses or add symptoms that are not stated.
+    Include optional qualifiers when explicitly present (duration, location, onset).
+    Return a clean symptom list ready for ontology matching.
+  expected_output: >
+    A JSON object with key "symptoms" containing a list of symptom objects.
+    Each object must have a "name" key (string).
+    Optional keys "duration", "location", "onset" must only be present
+    if explicitly stated in the user message. Omit them otherwise.
+    All values must come from the user message only.
+  agent: symptom_extractor
+
+map_symptoms_to_symp_task:
+  description: >
+    You will receive a list of symptoms from the extract_symptoms_task output.
+    Process ALL symptoms in a single pass. For each symptom:
+
+    Step 1 - Search: Call graphdb_symp_search with:
+      {"symptom_text": "<symptom name>"}
+    Read candidate URIs, labels, and parsed IDs from the tool response.
+
+    Step 2 - Select best candidate by semantic label relevance.
+    If no relevant candidate is found, mark symptom as unmapped.
+
+    Step 3 - Retry: If no match found, retry up to 2 times using a synonym or
+    simplified version of the symptom text. If still no match, mark unmapped.
+
+    Step 4 - Use parsed_symp_number from the selected candidate.
+    If missing, parse only digits after SYMP_ from the selected URI.
+
+    Step 5 - Repeat for the next symptom until all are processed.
+
+    ABSOLUTE RULES:
+    - You MUST call graphdb_symp_search for every symptom. Never skip tool calls.
+    - matched_symp_uri and matched_symp_label MUST come from tool responses only.
+    - NEVER invent, guess, or assume any SYMP URI, label, or numeric ID.
+    - If tools return no results after all retries, set status "unmapped" and
+      set matched_symp_uri, matched_symp_label, parsed_symp_number all to null.
+    - An unmapped result with null values is always correct over any fabrication.
+
+    STRICT graphdb_symp_search call rules:
+    - Action input must be exactly one flat object: {"symptom_text": "<symptom name>"}
+    - Do not include extra keys.
+    - If a call fails, retry up to 2 times.
+  expected_output: >
+    A JSON object with key "symp_mappings" containing a list of objects.
+    Each object must have these keys:
+      "symptom": the symptom name string from the input
+      "matched_symp_uri": the full URI string returned by graphdb_symp_search, or null if unmapped
+      "matched_symp_label": the label string returned by graphdb_symp_search, or null if unmapped
+      "parsed_symp_number": the digits-only string extracted from the URI, or null if unmapped
+      "status": either "mapped" or "unmapped"
+      "notes": empty string on success, brief failure reason on unmapped
+
+    All non-null values in matched_symp_uri, matched_symp_label, and
+    parsed_symp_number MUST come directly from tool responses.
+    Do not invent or reuse any URI, label, or number from examples or memory.
+  agent: symp_mapper
+
+query_diseases_for_symptoms_task:
+  description: >
+    You will receive the symp_mappings list from the map_symptoms_to_symp_task output.
+
+    For each entry in symp_mappings, follow EXACTLY one of these two cases:
+
+    CASE A - status is "unmapped" OR parsed_symp_number is null or empty:
+      Do NOT call any tool.
+      Record this entry with disease_candidates set to [] and status "skipped".
+
+    CASE B - status is "mapped" AND parsed_symp_number is a non-empty digit string:
+      You MUST call graphdb_sparql_query_tool.
+      The tool takes ONE argument named exactly "symp_label".
+      The value must be the parsed_symp_number string from the mapping.
+      The Action Input must be a flat JSON object with exactly one key:
+        {"symp_label": "<the parsed_symp_number value>"}
+      Do NOT wrap in an array. Do NOT add other keys. One flat object only.
+
+      The tool returns a JSON string. Parse it and read the "disease_candidates"
+      array from the result. Copy every string from that array verbatim into
+      this entry's disease_candidates. Do not modify any string.
+
+    ABSOLUTE RULES:
+    - disease_candidates must contain ONLY strings from the tool response.
+    - NEVER invent, guess, infer, or paraphrase any disease name.
+    - NEVER use symptom names as disease names.
+    - NEVER copy disease names from examples, instructions, or memory.
+    - If the tool returns an empty "disease_candidates" array, record []
+      and set status "no_diseases". This is a correct and valid result.
+    - If the tool call fails, retry up to 2 times with the exact same input.
+      After 2 failures record [] and status "tool_failure". Never fabricate.
+    - An empty disease_candidates list is always correct over any fabrication.
+
+    Process ALL entries before returning. Do not stop early.
+  expected_output: >
+    A JSON object with key "disease_results" containing a list of objects.
+    Each object must have these keys:
+      "symptom": the symptom name string from the mapping
+      "symp_uri": the matched_symp_uri from the mapping, or null if skipped
+      "parsed_symp_number": the parsed_symp_number from the mapping, or null if skipped
+      "disease_candidates": list of disease label strings from graphdb_sparql_query_tool,
+                            or empty list [] if no diseases found, tool failed, or skipped
+      "status": one of "success", "no_diseases", "tool_failure", "skipped"
+      "notes": empty string on success, brief description of outcome otherwise
+
+    CRITICAL: every string in disease_candidates must be copied verbatim from
+    the "disease_candidates" array in the graphdb_sparql_query_tool response.
+    Do not write any disease name from memory, examples, or inference.
+  agent: disease_mapper
+
+rank_diagnoses_task:
+  description: >
+    You will receive the disease_results list from the query_diseases_for_symptoms_task output.
+
+    Step 1 - Build co-occurrence index:
+    For each disease label in any disease_candidates list, count how many
+    distinct symptoms it appears under. This is its co-occurrence score.
+
+    Step 2 - Rank:
+    Sort diseases highest to lowest score. Break ties alphabetically.
+
+    Step 3 - Assign confidence tiers:
+      HIGH   = score >= 3
+      MEDIUM = score == 2
+      LOW    = score == 1
+
+    Step 4 - For each ranked disease, list the symptoms that support it.
+
+    Step 5 - Return the differential diagnosis report.
+
+    ABSOLUTE RULES:
+    - Only include diseases that appear in disease_results disease_candidates lists.
+    - NEVER add diseases from your own medical knowledge or memory.
+    - NEVER invent or infer any disease not present in the input data.
+    - If all disease_candidates lists are empty, return an empty
+      differential_diagnosis list and explain in notes. Do not fabricate.
+    - An empty diagnosis is always correct over a fabricated one.
+
+    If no disease appears under more than one symptom, return all with LOW
+    confidence and note low specificity.
+  expected_output: >
+    A JSON object with these keys:
+      "differential_diagnosis": list of ranked disease objects, each with:
+        "rank": integer starting from 1
+        "disease": disease label string copied exactly from disease_results
+        "co_occurrence_score": integer count of symptoms the disease appeared under
+        "confidence": "HIGH", "MEDIUM", or "LOW"
+        "supporting_symptoms": list of symptom name strings from disease_results
+      "total_symptoms_processed": integer count of all symptoms received
+      "total_diseases_found": integer count of unique disease labels across all results
+      "unmapped_symptoms": list of symptom name strings with status "unmapped" or "skipped"
+      "notes": brief summary string
+
+    differential_diagnosis may be an empty list if no tool returned any diseases.
+    Every disease string must be copied verbatim from the disease_candidates in
+    the input. Do not write any disease name from memory or inference.
+  agent: diagnosis_ranker
