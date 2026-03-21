@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any
 
-from crewai import Agent, Crew, Process, Task, TaskOutput
+from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 
@@ -10,20 +10,26 @@ from crewai.agents.agent_builder.base_agent import BaseAgent
 @CrewBase
 class Hospitalmas():
     """
-    Hospitalmas crew - orchestrated ontology-driven diagnostic pipeline.
+    Two-crew human-in-the-loop diagnostic pipeline.
 
-        Agent responsibilities:
-            orchestrator       - main manager that coordinates specialist execution
-      symptom_extractor  - parse raw user text -> structured symptom list (no tools)
-            symp_mapper        - map each symptom -> SYMP URI + numeric ID (GraphDB SYMP search)
-      disease_mapper     - query GraphDB per SYMP ID -> disease candidates (SPARQL tool)
-      diagnosis_ranker   - rank diseases by co-occurrence -> differential Dx (no tools)
+    Phase 1  (diagnostic_crew):
+        symptom_extractor → symp_mapper → disease_mapper →
+        diagnosis_ranker  → followup_interviewer
+        Ends by returning a list of yes/no follow-up questions.
+        main.py pauses here and presents them to the patient.
+
+    Phase 2  (refine_crew):
+        diagnosis_refiner
+        Receives initial ranking + answered questions via task description
+        and returns the refined differential diagnosis.
     """
 
     agents: list[BaseAgent]
     tasks: list[Task]
 
     runtime_tools: list = []
+
+    # ── Agents ───────────────────────────────────────────────────────────────
 
     @agent
     def orchestrator(self) -> Agent:
@@ -35,8 +41,6 @@ class Hospitalmas():
             max_iter=20,
             max_retry_limit=2,
         )
-
-
 
     @agent
     def symptom_extractor(self) -> Agent:
@@ -116,6 +120,7 @@ class Hospitalmas():
             max_retry_limit=1,
         )
 
+    # ── Phase 1 tasks ─────────────────────────────────────────────────────────
 
     @task
     def extract_symptoms_task(self) -> Task:
@@ -129,7 +134,7 @@ class Hospitalmas():
         return Task(
             config=self.tasks_config['map_symptoms_to_symp_task'],
             agent=self.symp_mapper(),
-            context=[self.extract_symptoms_task()]
+            context=[self.extract_symptoms_task()],
         )
 
     @task
@@ -159,20 +164,42 @@ class Hospitalmas():
             ],
         )
 
-    @task
-    def refine_diagnosis_task(self) -> Task:
+    # ── Phase 2 task ──────────────────────────────────────────────────────────
+
+    def refine_diagnosis_task_dynamic(self, ranking_json: str, followup_json: str) -> Task:
+        """
+        Build the refinement task at runtime, injecting the answered follow-up
+        data directly into the task description so the refiner agent sees it
+        without needing cross-crew context references.
+        """
+        base_cfg = dict(self.tasks_config['refine_diagnosis_task'])
+        base_cfg['description'] = (
+            base_cfg.get('description', '').rstrip()
+            + "\n\n"
+            + "── INITIAL RANKING (JSON) ──────────────────────────────────────\n"
+            + ranking_json
+            + "\n\n"
+            + "── FOLLOW-UP ANSWERS (JSON) ────────────────────────────────────\n"
+            + followup_json
+        )
         return Task(
-            config=self.tasks_config['refine_diagnosis_task'],
+            description=base_cfg['description'],
+            expected_output=base_cfg.get('expected_output', ''),
             agent=self.diagnosis_refiner(),
-            context=[
-                self.rank_diagnoses_task(),
-                self.clarify_followup_symptoms_task(),
-            ],
         )
 
+    # ── Crew factories ────────────────────────────────────────────────────────
 
     @crew
     def crew(self) -> Crew:
+        """Default crew alias — runs Phase 1 only (for train/test/replay)."""
+        return self.diagnostic_crew()
+
+    def diagnostic_crew(self) -> Crew:
+        """
+        Phase 1: full diagnostic pipeline up to and including question generation.
+        Does NOT include the refiner — main.py pauses here for human input.
+        """
         return Crew(
             agents=[
                 self.symptom_extractor(),
@@ -180,7 +207,6 @@ class Hospitalmas():
                 self.disease_mapper(),
                 self.diagnosis_ranker(),
                 self.followup_interviewer(),
-                self.diagnosis_refiner(),
             ],
             tasks=[
                 self.extract_symptoms_task(),
@@ -191,6 +217,20 @@ class Hospitalmas():
             ],
             process=Process.hierarchical,
             manager_agent=self.orchestrator(),
+            verbose=True,
+            max_rpm=5,
+        )
+
+    def refine_crew(self, ranking_json: str, followup_json: str) -> Crew:
+        """
+        Phase 2: refine diagnosis using patient answers.
+        ranking_json and followup_json are serialised strings injected into
+        the task description so the refiner has full context.
+        """
+        return Crew(
+            agents=[self.diagnosis_refiner()],
+            tasks=[self.refine_diagnosis_task_dynamic(ranking_json, followup_json)],
+            process=Process.sequential,
             verbose=True,
             max_rpm=5,
         )

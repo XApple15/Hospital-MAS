@@ -2,6 +2,7 @@
 import sys
 import warnings
 import json
+import re
 from typing import Any
 
 from hospitalmas.crew import Hospitalmas
@@ -11,8 +12,124 @@ from hospitalmas.tools.graphdb_disease_symptoms_tool import GraphDbDiseaseSympto
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
+# ── Answer normalisation ──────────────────────────────────────────────────────
+
+_YES_TOKENS = {"yes", "y", "yeah", "yep", "yup", "sure", "affirmative", "correct", "true"}
+_NO_TOKENS  = {"no",  "n", "nope", "nah", "negative", "false", "never"}
+_UNSURE_TOKENS = {"unsure", "maybe", "idk", "unknown", "dontknow", "notsure", "neutral"}
+
+# Romanian aliases help with local patient inputs.
+_YES_TOKENS.update({"da", "sigur", "corect"})
+_NO_TOKENS.update({"nu"})
+
+
+def _normalize_answer(raw: str) -> str:
+    """Canonicalise patient input → 'yes' | 'no' | 'neutral'."""
+    token = ""
+    if raw.strip():
+        token = raw.strip().lower().split()[0]
+        token = re.sub(r"[^a-z]", "", token)
+    if token in _YES_TOKENS:
+        return "yes"
+    if token in _NO_TOKENS:
+        return "no"
+    return "neutral"
+
+
+def _build_patient_question(symptom: str, suggested_question: str) -> str:
+    """Ensure the asked question is concise, single-symptom, and yes/no friendly."""
+    clean_symptom = re.sub(r"\s+", " ", symptom.strip())
+    if not clean_symptom:
+        clean_symptom = "this symptom"
+
+    clean_q = re.sub(r"\s+", " ", (suggested_question or "").strip())
+    if not clean_q:
+        return f"Do you currently have this symptom ({clean_symptom})?"
+
+    # If the generated question appears multi-part, replace with a strict template.
+    if clean_q.count("?") > 1 or ", and " in clean_q.lower() or " or " in clean_q.lower():
+        return f"Do you currently have this symptom ({clean_symptom})?"
+
+    if clean_q[-1] != "?":
+        clean_q = f"{clean_q}?"
+
+    # Keep wording short and clear for terminal UX.
+    if len(clean_q.split()) > 16:
+        return f"Do you currently have this symptom ({clean_symptom})?"
+
+    # Always include the medical term in parentheses.
+    if f"({clean_symptom})" not in clean_q:
+        clean_q = clean_q.rstrip("?").strip()
+        clean_q = f"{clean_q} ({clean_symptom})?"
+
+    return clean_q
+
+
+def _confirmed_yes_symptoms(followup_payload: dict[str, Any]) -> list[str]:
+    """Return unique symptom labels that were confirmed with a yes answer."""
+    symptoms: list[str] = []
+    seen: set[str] = set()
+
+    for q in followup_payload.get("questions_asked", []) or []:
+        if not isinstance(q, dict):
+            continue
+        answer = str(q.get("patient_answer", "")).strip().lower()
+        if answer != "yes":
+            continue
+        symptom = str(q.get("symptom", "")).strip()
+        if not symptom:
+            continue
+        key = symptom.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        symptoms.append(symptom)
+
+    return symptoms
+
+
+def _merge_existing_answers(
+    old_followup_payload: dict[str, Any],
+    new_followup_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Copy already answered symptoms into a regenerated follow-up payload."""
+    old_answers: dict[str, str] = {}
+
+    for q in old_followup_payload.get("questions_asked", []) or []:
+        if not isinstance(q, dict):
+            continue
+        symptom = str(q.get("symptom", "")).strip()
+        answer = str(q.get("patient_answer", "")).strip()
+        if not symptom or not answer:
+            continue
+        old_answers[symptom.casefold()] = answer
+
+    for q in new_followup_payload.get("questions_asked", []) or []:
+        if not isinstance(q, dict):
+            continue
+        symptom = str(q.get("symptom", "")).strip()
+        if not symptom:
+            continue
+        prev = old_answers.get(symptom.casefold())
+        if prev:
+            q["patient_answer"] = prev
+
+    return new_followup_payload
+
+
+def _run_phase1(user_message: str) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    """Run Phase 1 once and return raw result plus parsed ranking/follow-up payloads."""
+    Hospitalmas.runtime_tools = _build_runtime_tools()
+    phase1_result = Hospitalmas().diagnostic_crew().kickoff(
+        inputs={"user_message": user_message}
+    )
+    ranking_payload, followup_payload = _extract_phase1_payloads(phase1_result)
+    return phase1_result, ranking_payload, followup_payload
+
+
+# ── Tool factory ──────────────────────────────────────────────────────────────
+
 def _build_runtime_tools() -> list:
-   
     return [
         GraphDbSympSearchTool(),
         GraphDbSparqlQueryTool(),
@@ -20,126 +137,200 @@ def _build_runtime_tools() -> list:
     ]
 
 
-def _parse_json_from_text(raw_text: str) -> dict[str, Any] | None:
-    if not raw_text:
-        return None
+# ── JSON extraction helpers ───────────────────────────────────────────────────
 
+def _parse_json(raw: str) -> dict[str, Any] | None:
+    """Extract the first JSON object from a raw string."""
+    if not raw:
+        return None
     try:
-        parsed = json.loads(raw_text)
-        return parsed if isinstance(parsed, dict) else None
+        p = json.loads(raw)
+        return p if isinstance(p, dict) else None
     except json.JSONDecodeError:
         pass
-
-    start_idx = raw_text.find("{")
-    end_idx = raw_text.rfind("}")
-    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+    s, e = raw.find("{"), raw.rfind("}")
+    if s == -1 or e <= s:
         return None
-
     try:
-        parsed = json.loads(raw_text[start_idx : end_idx + 1])
-        return parsed if isinstance(parsed, dict) else None
+        p = json.loads(raw[s:e + 1])
+        return p if isinstance(p, dict) else None
     except json.JSONDecodeError:
         return None
 
 
-def _extract_rank_and_followup_payloads(crew_result: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    ranking_payload: dict[str, Any] = {}
-    followup_payload: dict[str, Any] = {}
+def _extract_phase1_payloads(
+    crew_result: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Walk task outputs and separate:
+      ranking_payload  — has 'differential_diagnosis'
+      followup_payload — has 'followup_needed' + 'questions_asked'
+    """
+    ranking: dict[str, Any]  = {}
+    followup: dict[str, Any] = {}
 
-    task_outputs = getattr(crew_result, "tasks_output", []) or []
-    for task_output in task_outputs:
-        raw = getattr(task_output, "raw", "")
-        parsed = _parse_json_from_text(raw)
+    for task_out in getattr(crew_result, "tasks_output", []) or []:
+        parsed = _parse_json(getattr(task_out, "raw", ""))
         if not parsed:
             continue
-
         if "differential_diagnosis" in parsed:
-            ranking_payload = parsed
-
+            ranking = parsed
         if "followup_needed" in parsed and "questions_asked" in parsed:
-            followup_payload = parsed
+            followup = parsed
 
-    return ranking_payload, followup_payload
+    return ranking, followup
 
 
-def _ask_followup_questions_sequentially(followup_payload: dict[str, Any]) -> dict[str, Any]:
-    followup_needed = bool(followup_payload.get("followup_needed", False))
-    questions = followup_payload.get("questions_asked", [])
+# ── Human-in-the-loop question collection ────────────────────────────────────
 
-    if not followup_needed or not isinstance(questions, list) or not questions:
+def _collect_answers(followup_payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Present each unanswered follow-up question to the patient at the terminal.
+    Normalises every answer before storing it.
+    Mutates and returns the followup_payload with patient_answer fields filled.
+    """
+    if not followup_payload.get("followup_needed", False):
+        print("\n[No follow-up needed — only one disease candidate found.]\n")
         return followup_payload
 
-    print("\nFollow-up questions (answer one by one):")
-    total_questions = len(questions)
-
-    for idx, question_item in enumerate(questions, start=1):
-        if not isinstance(question_item, dict):
+    questions: list[dict] = followup_payload.get("questions_asked", [])
+    deduped_questions: list[dict] = []
+    seen_symptoms: set[str] = set()
+    for q in questions:
+        if not isinstance(q, dict):
             continue
+        symptom_key = str(q.get("symptom", "")).strip().casefold()
+        if symptom_key and symptom_key in seen_symptoms:
+            continue
+        if symptom_key:
+            seen_symptoms.add(symptom_key)
+        deduped_questions.append(q)
 
-        question_text = (question_item.get("question") or "").strip()
-        if not question_text:
-            symptom_name = str(question_item.get("symptom") or "this symptom").strip()
-            question_text = f"Do you experience {symptom_name}?"
+    unanswered = [
+        q for q in deduped_questions
+        if not (q.get("patient_answer") or "").strip()
+    ]
 
-        answer = input(f"[{idx}/{total_questions}] {question_text} ").strip()
-        question_item["patient_answer"] = answer
+    if not unanswered:
+        print("\n[All follow-up questions already have answers.]\n")
+        return followup_payload
+
+    total = len(unanswered)
+    print(f"\n{'─'*60}")
+    print(f"  Follow-up questions ({total})")
+    print(f"  Answer each with: yes / no / unsure (or da / nu)")
+    print(f"{'─'*60}\n")
+
+    for idx, q in enumerate(unanswered, start=1):
+        question_text = (q.get("question") or "").strip()
+        symptom = str(q.get("symptom") or "this symptom").strip()
+        question_text = _build_patient_question(symptom, question_text)
+
+        # Keep prompting until a non-empty answer is given
+        while True:
+            raw = input(f"[{idx}/{total}] {question_text} ").strip()
+            if raw:
+                break
+            print("        Please enter an answer (yes / no / unsure)")
+
+        normalised = _normalize_answer(raw)
+        cleaned = re.sub(r"[^a-z]", "", raw.strip().lower().split()[0]) if raw.strip() else ""
+        if normalised == "neutral" and cleaned not in _UNSURE_TOKENS:
+            print("        Interpreted as unsure/neutral. Use yes/no for stronger evidence.")
+        q["patient_answer"] = normalised
+        print(f"        → recorded: {normalised}\n")
 
     return followup_payload
 
 
-def _run_refinement_with_answers(
+# ── Phase 2: run the refinement crew ─────────────────────────────────────────
+
+def _run_refine_phase(
     ranking_payload: dict[str, Any],
-    followup_payload_with_answers: dict[str, Any],
+    followup_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    refiner_agent = Hospitalmas().diagnosis_refiner()
+    """
+    Kick off the refine_crew with the answered follow-up data baked into the
+    task description.  Returns the refined diagnosis dict.
+    """
+    ranking_json  = json.dumps(ranking_payload,  indent=2, ensure_ascii=True)
+    followup_json = json.dumps(followup_payload, indent=2, ensure_ascii=True)
 
-    prompt = (
-        "Refine the diagnosis ranking using the initial differential diagnosis and "
-        "the sequential follow-up answers. Return ONLY valid JSON with keys "
-        "refined_differential_diagnosis, followup_summary, and notes.\n\n"
-        f"Initial ranking JSON:\n{json.dumps(ranking_payload, ensure_ascii=True)}\n\n"
-        f"Follow-up answers JSON:\n{json.dumps(followup_payload_with_answers, ensure_ascii=True)}"
-    )
+    hospitalmas = Hospitalmas()
+    hospitalmas.runtime_tools = _build_runtime_tools()
 
-    refinement_result = refiner_agent.kickoff(prompt)
-    refinement_raw = getattr(refinement_result, "raw", str(refinement_result))
-    refinement_payload = _parse_json_from_text(refinement_raw)
-    if refinement_payload is None:
-        return {
-            "refined_differential_diagnosis": [],
-            "followup_summary": "Refinement agent did not return valid JSON.",
-            "notes": refinement_raw,
-        }
+    result = hospitalmas.refine_crew(ranking_json, followup_json).kickoff()
 
-    return refinement_payload
+    raw = getattr(result, "raw", str(result))
+    parsed = _parse_json(raw)
+    if parsed and "refined_differential_diagnosis" in parsed:
+        return parsed
+
+    return {
+        "refined_differential_diagnosis": [],
+        "followup_summary": "Refiner did not return valid JSON.",
+        "notes": raw,
+    }
 
 
+# ── Entry points ──────────────────────────────────────────────────────────────
 
 def run():
     user_message = input("Describe your symptoms: ").strip()
     if not user_message:
         user_message = "I have bone pain."
 
-    inputs = {"user_message": user_message}
+    # ── Phase 1: diagnostic pipeline → question generation ────────────────
+    print("\n[Phase 1] Running diagnostic pipeline...\n")
+    phase1_result, ranking_payload, followup_payload = _run_phase1(user_message)
 
-    try:
-        Hospitalmas.runtime_tools = _build_runtime_tools()
-        first_phase_result = Hospitalmas().crew().kickoff(inputs=inputs)
+    if not ranking_payload:
+        print("\n[Warning] No ranking payload found in Phase 1 output.")
+        print(getattr(phase1_result, "raw", str(phase1_result)))
+        return
 
-        ranking_payload, followup_payload = _extract_rank_and_followup_payloads(first_phase_result)
+    # If only 0–1 diseases found, skip follow-up entirely
+    total_diseases = ranking_payload.get("total_diseases_found", 0)
+    if total_diseases <= 1:
+        print("\n── Initial diagnosis (no follow-up needed) ──────────────────")
+        print(json.dumps(ranking_payload, indent=2, ensure_ascii=True))
+        return
 
-        if not followup_payload:
-            print("\nNo follow-up payload was produced. Initial output:")
-            print(getattr(first_phase_result, "raw", str(first_phase_result)))
-            return
+    if not followup_payload:
+        print("\n[Warning] Ranking found but no follow-up payload. Showing initial ranking.")
+        print(json.dumps(ranking_payload, indent=2, ensure_ascii=True))
+        return
 
-        followup_with_answers = _ask_followup_questions_sequentially(followup_payload)
-        refined_payload = _run_refinement_with_answers(ranking_payload, followup_with_answers)
+    # ── Human-in-the-loop: collect patient answers ─────────────────────────
+    followup_with_answers = _collect_answers(followup_payload)
 
-        print("\nRefined diagnosis:")
-        print(json.dumps(refined_payload, indent=2, ensure_ascii=True))
-    except Exception as e:
-        raise Exception(f"An error occurred while running the crew: {e}")
+    # ── Iterative improvement: re-run Phase 1 with confirmed follow-up symptoms ──
+    # This promotes patient-confirmed evidence into ontology mapping before final refinement.
+    confirmed_symptoms = _confirmed_yes_symptoms(followup_with_answers)
+    if confirmed_symptoms:
+        extra_context = "; ".join(confirmed_symptoms)
+        enriched_message = (
+            f"{user_message}\n"
+            f"Additional confirmed symptoms (yes answers): {extra_context}."
+        )
+        print("[Phase 1B] Re-running with confirmed follow-up symptoms...\n")
+
+        _, reranked_payload, refollowup_payload = _run_phase1(enriched_message)
+
+        if reranked_payload:
+            ranking_payload = reranked_payload
+        if refollowup_payload:
+            followup_with_answers = _merge_existing_answers(
+                followup_with_answers,
+                refollowup_payload,
+            )
+
+    # ── Phase 2: refine diagnosis with answers ─────────────────────────────
+    print("\n[Phase 2] Refining diagnosis...\n")
+    refined = _run_refine_phase(ranking_payload, followup_with_answers)
+
+    print("\n── Refined diagnosis ─────────────────────────────────────────")
+    print(json.dumps(refined, indent=2, ensure_ascii=True))
 
 
 def train():
@@ -157,14 +348,14 @@ def train():
             inputs=inputs,
         )
     except Exception as e:
-        raise Exception(f"An error occurred while training the crew: {e}")
+        raise Exception(f"An error occurred while training the crew: {e}") from e
 
 
 def replay():
     try:
         Hospitalmas().crew().replay(task_id=sys.argv[1])
     except Exception as e:
-        raise Exception(f"An error occurred while replaying the crew: {e}")
+        raise Exception(f"An error occurred while replaying the crew: {e}") from e
 
 
 def test():
@@ -181,15 +372,12 @@ def test():
             inputs=inputs,
         )
     except Exception as e:
-        raise Exception(f"An error occurred while testing the crew: {e}")
+        raise Exception(f"An error occurred while testing the crew: {e}") from e
 
 
 def run_with_trigger():
     if len(sys.argv) < 2:
-        raise Exception(
-            "No trigger payload provided. Please provide JSON payload as argument."
-        )
-
+        raise Exception("No trigger payload provided.")
     try:
         trigger_payload = json.loads(sys.argv[1])
     except json.JSONDecodeError:
@@ -199,12 +387,8 @@ def run_with_trigger():
         "crewai_trigger_payload": trigger_payload,
         "user_message": trigger_payload.get("user_message", ""),
     }
-
     try:
         Hospitalmas.runtime_tools = _build_runtime_tools()
-        result = Hospitalmas().crew().kickoff(inputs=inputs)
-        return result
+        return Hospitalmas().diagnostic_crew().kickoff(inputs=inputs)
     except Exception as e:
-        raise Exception(
-            f"An error occurred while running the crew with trigger: {e}"
-        )
+        raise Exception(f"An error occurred while running the crew with trigger: {e}") from e

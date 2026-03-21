@@ -158,7 +158,10 @@ rank_diagnoses_task:
     Step 2 - Rank:
     Sort diseases highest to lowest score. Break ties alphabetically.
 
-    Step 3 - Assign confidence tiers:HIGH   ,MEDIUM,LOW   
+    Step 3 - Assign confidence tiers:
+      HIGH   — co_occurrence_score ≥ 60% of total_symptoms_processed
+      MEDIUM — co_occurrence_score 30–59% of total_symptoms_processed
+      LOW    — co_occurrence_score < 30% of total_symptoms_processed
 
     Step 4 - For each ranked disease, list the symptoms that support it.
 
@@ -196,86 +199,163 @@ clarify_followup_symptoms_task:
   description: >
     You will receive disease_results and differential_diagnosis from prior tasks.
 
-    Trigger rule:
-    - If total_diseases_found <= 1, do not ask follow-up questions.
-      Return followup_needed=false and empty arrays.
-    - If total_diseases_found > 1, follow-up is mandatory.
+    ── TRIGGER RULE ──────────────────────────────────────────────────────────
+    If total_diseases_found <= 1:
+      Set followup_needed = false. Return empty disease_symptom_profiles and
+      questions_asked arrays immediately. Do not call any tools.
+    If total_diseases_found > 1:
+      Follow-up is MANDATORY. Continue with the steps below.
+    ──────────────────────────────────────────────────────────────────────────
 
-    For each disease candidate (use disease_entries to get disease_uri), call
-    graphdb_disease_symptoms with:
-      {"disease_uri": "<full disease URI>"}
+    Step 1 - Select candidate diseases for profiling.
+      Take all diseases with HIGH or MEDIUM confidence from differential_diagnosis.
+      Also include any LOW-confidence diseases whose co_occurrence_score equals
+      the highest co_occurrence_score present (ties at the top).
+      Cap the candidate set at 5 diseases.
 
-    Build ONE global candidate symptom pool across all disease profiles, then
-    select only discriminative symptoms for questioning.
+    Step 2 - Fetch symptom profiles.
+      For each candidate disease, locate its disease_uri in disease_entries
+      (from disease_results). If no URI is available, mark it skipped_for_followup.
+      For every disease with a URI, call graphdb_disease_symptoms with:
+        {"disease_uri": "<full URI>"}
+      Collect the returned symptom labels into that disease's candidate_symptoms list.
+      Do not fabricate symptom labels. Use tool output only.
 
-    Discriminative symptom selection rules:
-    - Exclude symptoms already present in the initial user message.
-    - Exclude symptoms that appear in ALL candidate diseases.
-    - Prefer symptoms that appear in only one or a few diseases.
-    - Deduplicate by normalized symptom text (case-insensitive).
+    Step 3 - Build a global discriminative symptom pool.
+      Collect every symptom label across all profiled diseases into one pool.
+      Then apply these filters IN ORDER:
+        a) Remove symptoms already present in the initial patient message
+           (case-insensitive match against the original extracted symptom names).
+        b) Remove symptoms that appear in ALL candidate disease profiles
+           (they cannot discriminate between diseases).
+        c) Score each remaining symptom by discriminative power:
+             score = (number of candidate diseases that do NOT list this symptom)
+             Higher score = more exclusive to fewer diseases = more discriminative.
+        d) Break ties by preferring symptoms linked to higher-ranked diseases
+           (lower rank number = higher priority).
 
-    Question generation rules:
-    - Ask each symptom at most once globally (not once per disease).
-    - If a question already has a non-empty patient_answer in the input context,
-      do NOT ask it again.
-    - If this task is re-run, only output unanswered questions.
-    - Maximum 5 questions per run.
-    - Keep questions concise and clinical, one symptom per question.
-
-    Do not wait for answers in this task. Runtime asks sequentially.
+    Step 4 - Select questions.
+      Take the top 5 symptoms by discriminative score.
+      For each selected symptom, emit exactly one yes/no question in plain
+      clinical language using this preferred template:
+        "Do you currently have <simple everyday wording> (<medical term>)?"
+      If needed for grammar, a close equivalent is allowed, but it MUST remain
+      a single yes/no question about exactly one symptom.
+      Keep each question short (max 14 words), patient-friendly, and avoid
+      medical jargon unless it is part of the symptom label.
+      Do not ask severity, duration, or cause in the same question.
+      IMPORTANT language policy:
+      - Use easy, non-technical wording so any patient can understand.
+      - Always include the original medical term/symptom label in parentheses.
+      - Example: "Do you feel very tired (fatigue)?"
+      - Example: "Do you have yellow skin or eyes (jaundice)?"
+      - The wording before parentheses MUST explain the symptom in plain words,
+        not repeat the same medical label.
+      - FORBIDDEN example: "Do you have rash (rash)?"
+      - CORRECT example: "Do you have red or itchy skin spots (rash)?"
+      Global deduplication: never emit the same symptom question twice.
+      Skip any symptom that already has a non-empty patient_answer in the
+      input context (this task may be re-run; skip already-answered questions).
 
     ABSOLUTE RULES:
-    - Use graphdb_disease_symptoms only with disease URIs from disease_entries.
-    - Never invent disease URIs or symptom labels.
-    - If URI is missing for a disease, mark that disease as skipped_for_followup.
-    - Do not produce final diagnosis in this step.
-    - Never duplicate the same symptom question in questions_asked.
+    - Call graphdb_disease_symptoms ONLY with URIs from disease_entries.
+    - Never invent disease URIs, symptom URIs, or symptom labels.
+    - Never ask about a symptom the patient already confirmed.
+    - Never produce or suggest a final diagnosis in this step.
+    - questions_asked must contain no duplicate symptom entries.
+    - Each question must end with "?" and be answerable by yes/no only.
+    - Each question must reference exactly one symptom from candidate_symptoms.
+    - Each question must include the medical term in parentheses: "(... )".
+    - Text before parentheses must be semantically explanatory and MUST NOT be
+      identical to the parenthesized medical term (case-insensitive).
   expected_output: >
     A JSON object with keys:
-      "followup_needed": boolean
-      "disease_symptom_profiles": list of objects with:
-        "disease": disease label
-        "disease_uri": disease URI or null
-        "candidate_symptoms": list of symptom label strings from tool output
-        "status": "profiled" | "skipped_for_followup" | "tool_failure"
-      "questions_asked": list of objects with:
-        "disease": disease label
-        "symptom": symptom label
-        "question": exact question asked to patient
-        "patient_answer": null
-      "notes": brief summary
+      "followup_needed": boolean — true only when total_diseases_found > 1
+      "disease_symptom_profiles": list of objects, one per candidate disease:
+        "disease": disease label string (copied from differential_diagnosis)
+        "disease_uri": disease URI string from disease_entries, or null
+        "candidate_symptoms": list of symptom label strings from graphdb_disease_symptoms tool
+        "status": one of "profiled" | "skipped_for_followup" | "tool_failure"
+      "questions_asked": list of question objects, max 5:
+        "symptom": the symptom label string used to generate the question
+        "question": the yes/no question text to present to the patient
+        "patient_answer": null  ← always null at output time; filled externally
+      "notes": brief summary — number of diseases profiled, symptoms in pool,
+               questions selected, and any skipped diseases
   agent: followup_interviewer
 
 refine_diagnosis_task:
   description: >
-    You will receive the initial differential_diagnosis and follow-up responses.
+    You will receive the initial differential_diagnosis and the completed
+    questions_asked list with patient_answer fields filled in by the patient,
+    both provided as JSON blocks appended below this description by the runtime.
+    Also available: the disease_symptom_profiles list (which disease has which
+    candidate symptoms) from the follow-up payload.
 
-    Build an evidence adjustment per disease:
-    - For each confirmed follow-up symptom, add positive support.
-    - For each denied symptom, add negative support.
-    - For uncertain/no answer, treat as neutral.
+    ── SCORING ALGORITHM ─────────────────────────────────────────────────────
+    For every disease D in initial differential_diagnosis:
+      baseline      = D.co_occurrence_score
+      support_delta = 0
+      conflict_delta = 0
 
-    Re-rank diseases using:
-    1) original co_occurrence_score as baseline
-    2) follow-up evidence adjustments
-    3) deterministic tie-breaker alphabetically
+      For each question Q in questions_asked:
+        normalize answer = Q.patient_answer.strip().lower()
 
-    Then assign updated confidence tiers and explain evidence.
+        If normalize answer is "yes" or starts with "yes":
+          For each disease D whose candidate_symptoms list (in disease_symptom_profiles)
+          contains Q.symptom (case-insensitive):
+            support_delta += 1   (followup_support_count)
+
+        If normalize answer is "no" or starts with "no":
+          For each disease D whose candidate_symptoms list contains Q.symptom:
+            conflict_delta += 1  (followup_conflict_count)
+
+        Any other answer (blank, "unsure", "don't know", "maybe", etc.) → neutral, no change.
+
+      final_score[D] = baseline + support_delta - conflict_delta
+
+    ── RE-RANKING ────────────────────────────────────────────────────────────
+    Sort diseases by final_score descending. Break ties alphabetically.
+    Renumber ranks starting from 1.
+
+    ── CONFIDENCE ASSIGNMENT ─────────────────────────────────────────────────
+    Let top_score = final_score of rank-1 disease,
+        second_score = final_score of rank-2 disease (or 0 if only one disease).
+
+    Rank-1 disease:
+      HIGH   if top_score ≥ 2 × second_score, or only one disease remains
+      MEDIUM if top_score < 2 × second_score but top_score > second_score
+      LOW    if top_score == second_score (still tied after evidence)
+
+    All other diseases:
+      MEDIUM if their final_score > 0
+      LOW    otherwise
+
+    ── TRANSPARENCY ──────────────────────────────────────────────────────────
+    For each disease in the output, reasoning must explicitly state:
+      - Which follow-up symptoms were confirmed (yes answers) for this disease
+      - Which follow-up symptoms were denied (no answers) for this disease
+      - How the evidence shifted (or did not shift) its rank vs. baseline
+    followup_summary must name the single most impactful answer and why.
+    If ALL patient answers were neutral, set notes to:
+      "All follow-up answers were neutral; ranking unchanged from baseline."
 
     ABSOLUTE RULES:
-    - Only diseases present in initial differential_diagnosis may appear.
-    - Do not invent new diseases.
-    - Use follow-up answers as the only post-baseline evidence source.
+    - Only diseases present in initial differential_diagnosis may appear in output.
+    - Never invent new diseases or symptoms.
+    - Use follow-up answers as the ONLY post-baseline evidence source.
+    - An unchanged ranking with an honest explanation is always correct.
   expected_output: >
     A JSON object with keys:
-      "refined_differential_diagnosis": list of ranked objects with:
+      "refined_differential_diagnosis": list of ranked disease objects:
         "rank": integer starting at 1
-        "disease": disease label from initial ranking
-        "baseline_score": integer original co_occurrence_score
-        "followup_support_count": integer
-        "followup_conflict_count": integer
+        "disease": disease label copied exactly from initial ranking
+        "baseline_score": integer — original co_occurrence_score
+        "followup_support_count": integer — number of confirmed follow-up symptoms
+        "followup_conflict_count": integer — number of denied follow-up symptoms
+        "final_score": integer — baseline + support - conflict
         "updated_confidence": "HIGH" | "MEDIUM" | "LOW"
-        "reasoning": short evidence-based explanation
-      "followup_summary": brief summary of how patient answers changed ranking
-      "notes": brief final diagnostic caveats
+        "reasoning": string — explicit evidence narrative for this disease
+      "followup_summary": string — most impactful answer and overall effect on ranking
+      "notes": string — caveats, e.g. neutral-only answers, ties, missing URIs
   agent: diagnosis_refiner
