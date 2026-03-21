@@ -18,20 +18,31 @@ map_symptoms_to_symp_task:
     You will receive a list of symptoms from the extract_symptoms_task output.
     Process ALL symptoms in a single pass. For each symptom:
 
-    Step 1 - Search: Call graphdb_symp_search with:
-      {"symptom_text": "<symptom name>"}
+    Step 1 - Search query authoring:
+    Build a read-only SPARQL SELECT query yourself to search SYMP labels by the symptom text.
+    Use this query shape (you may format whitespace freely):
+      PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+      SELECT ?symptom ?symptomLabel
+      WHERE {
+        ?symptom rdfs:label ?symptomLabel .
+        FILTER(CONTAINS(LCASE(STR(?symptomLabel)), "<lowercased symptom text>"))
+      }
+
+    Step 2 - Execute:
+    Call graphdb_symp_search with:
+      {"sparql_query": "<full query string>"}
     Read candidate URIs, labels, and parsed IDs from the tool response.
 
-    Step 2 - Select best candidate by semantic label relevance.
+    Step 3 - Select best candidate by semantic label relevance.
     If no relevant candidate is found, mark symptom as unmapped.
 
-    Step 3 - Retry: If no match found, retry up to 2 times using a synonym or
+    Step 4 - Retry: If no match found, retry up to 2 times using a synonym or
     simplified version of the symptom text. If still no match, mark unmapped.
 
-    Step 4 - Use parsed_symp_number from the selected candidate.
+    Step 5 - Use parsed_symp_number from the selected candidate.
     If missing, parse only digits after SYMP_ from the selected URI.
 
-    Step 5 - Repeat for the next symptom until all are processed.
+    Step 6 - Repeat for the next symptom until all are processed.
 
     ABSOLUTE RULES:
     - You MUST call graphdb_symp_search for every symptom. Never skip tool calls.
@@ -42,9 +53,9 @@ map_symptoms_to_symp_task:
     - An unmapped result with null values is always correct over any fabrication.
 
     STRICT graphdb_symp_search call rules:
-    - Action input must be exactly one flat object: {"symptom_text": "<symptom name>"}
+    - Action input must be exactly one flat object: {"sparql_query": "<full query string>"}
     - Do not include extra keys.
-    - If a call fails, retry up to 2 times.
+    - If a call fails, retry up to 2 times after fixing your SPARQL query.
   expected_output: >
     A JSON object with key "symp_mappings" containing a list of objects.
     Each object must have these keys:
@@ -71,11 +82,28 @@ query_diseases_for_symptoms_task:
       Record this entry with disease_candidates set to [] and status "skipped".
 
     CASE B - status is "mapped" AND parsed_symp_number is a non-empty digit string:
-      You MUST call graphdb_sparql_query_tool.
-      The tool takes ONE argument named exactly "symp_label".
-      The value must be the parsed_symp_number string from the mapping.
+      You MUST construct a read-only SPARQL SELECT query yourself.
+      Use the parsed_symp_number from the mapping as the SYMP term in the query.
+
+      Required query shape (you may format whitespace freely):
+      PREFIX owl: <http://www.w3.org/2002/07/owl#>
+      PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+      PREFIX ro: <http://purl.obolibrary.org/obo/RO_>
+      PREFIX symp: <http://purl.obolibrary.org/obo/SYMP_>
+      SELECT ?disease ?diseaseLabel
+      WHERE {
+        ?disease rdfs:subClassOf ?restriction .
+        ?restriction owl:onProperty ro:0002452 .
+        ?restriction owl:someValuesFrom symp:<parsed_symp_number> .
+        ?disease rdfs:label ?diseaseLabel .
+        FILTER(LANG(?diseaseLabel) = "en")
+      }
+
+      Then call graphdb_sparql_query.
+      The tool takes ONE argument named exactly "sparql_query".
+      The value must be your full SPARQL query string.
       The Action Input must be a flat JSON object with exactly one key:
-        {"symp_label": "<the parsed_symp_number value>"}
+        {"sparql_query": "<full query string>"}
       Do NOT wrap in an array. Do NOT add other keys. One flat object only.
 
       The tool returns a JSON string. Parse it and read the "disease_candidates"
@@ -89,7 +117,7 @@ query_diseases_for_symptoms_task:
     - NEVER copy disease names from examples, instructions, or memory.
     - If the tool returns an empty "disease_candidates" array, record []
       and set status "no_diseases". This is a correct and valid result.
-    - If the tool call fails, retry up to 2 times with the exact same input.
+    - If the tool call fails, retry up to 2 times after fixing your SPARQL query.
       After 2 failures record [] and status "tool_failure". Never fabricate.
     - An empty disease_candidates list is always correct over any fabrication.
 
@@ -100,13 +128,13 @@ query_diseases_for_symptoms_task:
       "symptom": the symptom name string from the mapping
       "symp_uri": the matched_symp_uri from the mapping, or null if skipped
       "parsed_symp_number": the parsed_symp_number from the mapping, or null if skipped
-      "disease_candidates": list of disease label strings from graphdb_sparql_query_tool,
+      "disease_candidates": list of disease label strings from graphdb_sparql_query,
                             or empty list [] if no diseases found, tool failed, or skipped
       "status": one of "success", "no_diseases", "tool_failure", "skipped"
       "notes": empty string on success, brief description of outcome otherwise
 
     CRITICAL: every string in disease_candidates must be copied verbatim from
-    the "disease_candidates" array in the graphdb_sparql_query_tool response.
+    the "disease_candidates" array in the graphdb_sparql_query response.
     Do not write any disease name from memory, examples, or inference.
   agent: disease_mapper
 
@@ -121,10 +149,7 @@ rank_diagnoses_task:
     Step 2 - Rank:
     Sort diseases highest to lowest score. Break ties alphabetically.
 
-    Step 3 - Assign confidence tiers:
-      HIGH   = score >= 3
-      MEDIUM = score == 2
-      LOW    = score == 1
+    Step 3 - Assign confidence tiers:HIGH   ,MEDIUM,LOW   
 
     Step 4 - For each ranked disease, list the symptoms that support it.
 

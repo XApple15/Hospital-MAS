@@ -14,19 +14,19 @@ from pydantic import BaseModel, Field
 class GraphDbSympSearchToolInput(BaseModel):
     """Input schema for GraphDbSympSearchTool."""
 
-    symptom_text: str = Field(
+    sparql_query: str = Field(
         ...,
-        description="Free-text symptom name to search in the SYMP ontology labels",
+        description="Complete SPARQL query to execute for SYMP term search",
     )
 
 
 class GraphDbSympSearchTool(BaseTool):
-    """Search SYMP terms in GraphDB by symptom text."""
+    """Execute an agent-provided SPARQL query and return SYMP candidates."""
 
     name: str = "graphdb_symp_search"
     description: str = (
-        "Search SYMP terms in GraphDB by symptom text and return candidate "
-        "SYMP URIs, labels, and parsed numeric IDs."
+        "Execute an agent-authored read-only GraphDB SPARQL query and return "
+        "candidate SYMP URIs, labels, and parsed numeric IDs."
     )
     args_schema: Type[BaseModel] = GraphDbSympSearchToolInput
 
@@ -34,22 +34,25 @@ class GraphDbSympSearchTool(BaseTool):
         super().__init__(**kwargs)
         self._timeout_seconds = timeout_seconds
 
-    def _run(self, symptom_text: str) -> str:
-        clean_symptom_text = " ".join(symptom_text.split())
-        if not clean_symptom_text:
-            return "symptom_text is empty"
+    def _run(self, sparql_query: str) -> str:
+        clean_sparql_query = sparql_query.strip()
+        if not clean_sparql_query:
+            return "sparql_query is empty"
 
-        escaped_text = clean_symptom_text.replace("\\", "\\\\").replace('"', '\\"')
-        clean_query = f"""PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                        SELECT DISTINCT ?symptom ?symptomLabel 
-                        WHERE {{
-                            ?symptom rdfs:label ?symptomLabel .
-                       
-                            FILTER (
-                                CONTAINS(LCASE(STR(?symptomLabel)), "{escaped_text}"))
-                        }}"""
+        upper_query = clean_sparql_query.lstrip().upper()
+        if not (
+            upper_query.startswith("SELECT")
+            or upper_query.startswith("PREFIX")
+            or upper_query.startswith("ASK")
+            or upper_query.startswith("CONSTRUCT")
+            or upper_query.startswith("DESCRIBE")
+        ):
+            return (
+                "Only read-only SPARQL queries are allowed. "
+                "Expected SELECT/ASK/CONSTRUCT/DESCRIBE (optionally with PREFIX lines)."
+            )
 
-        payload = urlencode({"query": clean_query}).encode("utf-8")
+        payload = urlencode({"query": clean_sparql_query}).encode("utf-8")
         headers = {
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Accept": "application/sparql-results+json, application/json;q=0.9, */*;q=0.8",
@@ -88,8 +91,17 @@ class GraphDbSympSearchTool(BaseTool):
         candidates: list[dict[str, str | None]] = []
 
         for row in bindings:
-            symp_uri = row.get("symp", {}).get("value", "")
-            symp_label = row.get("sympLabel", {}).get("value", "")
+            symp_uri = (
+                row.get("symptom", {}).get("value", "")
+                or row.get("symp", {}).get("value", "")
+                or row.get("term", {}).get("value", "")
+            )
+            symp_label = (
+                row.get("symptomLabel", {}).get("value", "")
+                or row.get("sympLabel", {}).get("value", "")
+                or row.get("termLabel", {}).get("value", "")
+                or row.get("label", {}).get("value", "")
+            )
 
             parsed_number: str | None = None
             match = re.search(r"SYMP_(\d+)$", symp_uri)
@@ -107,7 +119,7 @@ class GraphDbSympSearchTool(BaseTool):
 
         result = {
             "status_code": status_code,
-            "symptom_text": clean_symptom_text,
+            "executed_query": clean_sparql_query,
             "result_row_count": len(bindings),
             "candidate_count": len(candidates),
             "candidates": candidates,

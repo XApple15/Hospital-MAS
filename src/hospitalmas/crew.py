@@ -1,4 +1,8 @@
-from crewai import Agent, Crew, Process, Task
+import json
+import re
+from typing import Any
+
+from crewai import Agent, Crew, Process, Task, TaskOutput
 from crewai.project import CrewBase, agent, crew, task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 
@@ -87,7 +91,7 @@ class Hospitalmas():
         return Task(
             config=self.tasks_config['map_symptoms_to_symp_task'],
             agent=self.symp_mapper(),
-            context=[self.extract_symptoms_task()],
+            context=[self.extract_symptoms_task()]
         )
 
     @task

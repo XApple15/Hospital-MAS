@@ -21,7 +21,7 @@ def _build_runtime_tools() -> list:
 def run():
     inputs = {
         "user_message": (
-            "I have knee pain and bone pain."
+            "I have bone pain."
         )
     }
     try:
