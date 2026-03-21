@@ -10,9 +10,10 @@ from crewai.agents.agent_builder.base_agent import BaseAgent
 @CrewBase
 class Hospitalmas():
     """
-    Hospitalmas crew - 4-agent ontology-driven diagnostic pipeline.
+    Hospitalmas crew - orchestrated ontology-driven diagnostic pipeline.
 
-    Agent responsibilities:
+        Agent responsibilities:
+            orchestrator       - main manager that coordinates specialist execution
       symptom_extractor  - parse raw user text -> structured symptom list (no tools)
             symp_mapper        - map each symptom -> SYMP URI + numeric ID (GraphDB SYMP search)
       disease_mapper     - query GraphDB per SYMP ID -> disease candidates (SPARQL tool)
@@ -23,6 +24,17 @@ class Hospitalmas():
     tasks: list[Task]
 
     runtime_tools: list = []
+
+    @agent
+    def orchestrator(self) -> Agent:
+        return Agent(
+            config=self.agents_config['orchestrator'],
+            tools=[],
+            verbose=True,
+            allow_delegation=True,
+            max_iter=20,
+            max_retry_limit=2,
+        )
 
 
 
@@ -114,9 +126,15 @@ class Hospitalmas():
     @crew
     def crew(self) -> Crew:
         return Crew(
-            agents=self.agents,
+            agents=[
+                self.symptom_extractor(),
+                self.symp_mapper(),
+                self.disease_mapper(),
+                self.diagnosis_ranker(),
+            ],
             tasks=self.tasks,
-            process=Process.sequential,
+            process=Process.hierarchical,
+            manager_agent=self.orchestrator(),
             verbose=True,
             max_rpm=5,
         )
