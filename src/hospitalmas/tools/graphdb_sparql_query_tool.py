@@ -108,6 +108,7 @@ class GraphDbSparqlQueryTool(BaseTool):
                 disease_rows.append(
                     {
                         "disease_iri": disease_iri,
+                        "disease_uri": disease_iri,
                         "disease_label": disease_label,
                     }
                 )

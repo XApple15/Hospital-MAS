@@ -110,8 +110,13 @@ query_diseases_for_symptoms_task:
       array from the result. Copy every string from that array verbatim into
       this entry's disease_candidates. Do not modify any string.
 
+      Also parse "disease_rows" from the same tool response. For each row,
+      copy disease URI and label exactly as returned into disease_entries.
+      Prefer row.disease_uri if present, otherwise row.disease_iri.
+
     ABSOLUTE RULES:
     - disease_candidates must contain ONLY strings from the tool response.
+    - disease_entries must contain ONLY URI/label pairs from tool response rows.
     - NEVER invent, guess, infer, or paraphrase any disease name.
     - NEVER use symptom names as disease names.
     - NEVER copy disease names from examples, instructions, or memory.
@@ -130,12 +135,16 @@ query_diseases_for_symptoms_task:
       "parsed_symp_number": the parsed_symp_number from the mapping, or null if skipped
       "disease_candidates": list of disease label strings from graphdb_sparql_query,
                             or empty list [] if no diseases found, tool failed, or skipped
+      "disease_entries": list of objects with keys:
+             "disease_uri": full disease URI string from tool response, or null
+             "disease_label": disease label string from tool response, or null
       "status": one of "success", "no_diseases", "tool_failure", "skipped"
       "notes": empty string on success, brief description of outcome otherwise
 
     CRITICAL: every string in disease_candidates must be copied verbatim from
     the "disease_candidates" array in the graphdb_sparql_query response.
     Do not write any disease name from memory, examples, or inference.
+    Every disease_entries object must be copied from response rows only.
   agent: disease_mapper
 
 rank_diagnoses_task:
@@ -182,3 +191,91 @@ rank_diagnoses_task:
     Every disease string must be copied verbatim from the disease_candidates in
     the input. Do not write any disease name from memory or inference.
   agent: diagnosis_ranker
+
+clarify_followup_symptoms_task:
+  description: >
+    You will receive disease_results and differential_diagnosis from prior tasks.
+
+    Trigger rule:
+    - If total_diseases_found <= 1, do not ask follow-up questions.
+      Return followup_needed=false and empty arrays.
+    - If total_diseases_found > 1, follow-up is mandatory.
+
+    For each disease candidate (use disease_entries to get disease_uri), call
+    graphdb_disease_symptoms with:
+      {"disease_uri": "<full disease URI>"}
+
+    Build ONE global candidate symptom pool across all disease profiles, then
+    select only discriminative symptoms for questioning.
+
+    Discriminative symptom selection rules:
+    - Exclude symptoms already present in the initial user message.
+    - Exclude symptoms that appear in ALL candidate diseases.
+    - Prefer symptoms that appear in only one or a few diseases.
+    - Deduplicate by normalized symptom text (case-insensitive).
+
+    Question generation rules:
+    - Ask each symptom at most once globally (not once per disease).
+    - If a question already has a non-empty patient_answer in the input context,
+      do NOT ask it again.
+    - If this task is re-run, only output unanswered questions.
+    - Maximum 5 questions per run.
+    - Keep questions concise and clinical, one symptom per question.
+
+    Do not wait for answers in this task. Runtime asks sequentially.
+
+    ABSOLUTE RULES:
+    - Use graphdb_disease_symptoms only with disease URIs from disease_entries.
+    - Never invent disease URIs or symptom labels.
+    - If URI is missing for a disease, mark that disease as skipped_for_followup.
+    - Do not produce final diagnosis in this step.
+    - Never duplicate the same symptom question in questions_asked.
+  expected_output: >
+    A JSON object with keys:
+      "followup_needed": boolean
+      "disease_symptom_profiles": list of objects with:
+        "disease": disease label
+        "disease_uri": disease URI or null
+        "candidate_symptoms": list of symptom label strings from tool output
+        "status": "profiled" | "skipped_for_followup" | "tool_failure"
+      "questions_asked": list of objects with:
+        "disease": disease label
+        "symptom": symptom label
+        "question": exact question asked to patient
+        "patient_answer": null
+      "notes": brief summary
+  agent: followup_interviewer
+
+refine_diagnosis_task:
+  description: >
+    You will receive the initial differential_diagnosis and follow-up responses.
+
+    Build an evidence adjustment per disease:
+    - For each confirmed follow-up symptom, add positive support.
+    - For each denied symptom, add negative support.
+    - For uncertain/no answer, treat as neutral.
+
+    Re-rank diseases using:
+    1) original co_occurrence_score as baseline
+    2) follow-up evidence adjustments
+    3) deterministic tie-breaker alphabetically
+
+    Then assign updated confidence tiers and explain evidence.
+
+    ABSOLUTE RULES:
+    - Only diseases present in initial differential_diagnosis may appear.
+    - Do not invent new diseases.
+    - Use follow-up answers as the only post-baseline evidence source.
+  expected_output: >
+    A JSON object with keys:
+      "refined_differential_diagnosis": list of ranked objects with:
+        "rank": integer starting at 1
+        "disease": disease label from initial ranking
+        "baseline_score": integer original co_occurrence_score
+        "followup_support_count": integer
+        "followup_conflict_count": integer
+        "updated_confidence": "HIGH" | "MEDIUM" | "LOW"
+        "reasoning": short evidence-based explanation
+      "followup_summary": brief summary of how patient answers changed ranking
+      "notes": brief final diagnostic caveats
+  agent: diagnosis_refiner

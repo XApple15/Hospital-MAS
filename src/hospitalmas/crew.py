@@ -90,6 +90,32 @@ class Hospitalmas():
             max_retry_limit=1,
         )
 
+    @agent
+    def followup_interviewer(self) -> Agent:
+        followup_tools = [
+            t for t in self.runtime_tools
+            if getattr(t, "name", "") == "graphdb_disease_symptoms"
+        ]
+        return Agent(
+            config=self.agents_config['followup_interviewer'],
+            tools=followup_tools,
+            verbose=True,
+            allow_delegation=False,
+            max_iter=8,
+            max_retry_limit=2,
+        )
+
+    @agent
+    def diagnosis_refiner(self) -> Agent:
+        return Agent(
+            config=self.agents_config['diagnosis_refiner'],
+            tools=[],
+            verbose=True,
+            allow_delegation=False,
+            max_iter=4,
+            max_retry_limit=1,
+        )
+
 
     @task
     def extract_symptoms_task(self) -> Task:
@@ -122,6 +148,28 @@ class Hospitalmas():
             context=[self.query_diseases_for_symptoms_task()],
         )
 
+    @task
+    def clarify_followup_symptoms_task(self) -> Task:
+        return Task(
+            config=self.tasks_config['clarify_followup_symptoms_task'],
+            agent=self.followup_interviewer(),
+            context=[
+                self.query_diseases_for_symptoms_task(),
+                self.rank_diagnoses_task(),
+            ],
+        )
+
+    @task
+    def refine_diagnosis_task(self) -> Task:
+        return Task(
+            config=self.tasks_config['refine_diagnosis_task'],
+            agent=self.diagnosis_refiner(),
+            context=[
+                self.rank_diagnoses_task(),
+                self.clarify_followup_symptoms_task(),
+            ],
+        )
+
 
     @crew
     def crew(self) -> Crew:
@@ -131,8 +179,16 @@ class Hospitalmas():
                 self.symp_mapper(),
                 self.disease_mapper(),
                 self.diagnosis_ranker(),
+                self.followup_interviewer(),
+                self.diagnosis_refiner(),
             ],
-            tasks=self.tasks,
+            tasks=[
+                self.extract_symptoms_task(),
+                self.map_symptoms_to_symp_task(),
+                self.query_diseases_for_symptoms_task(),
+                self.rank_diagnoses_task(),
+                self.clarify_followup_symptoms_task(),
+            ],
             process=Process.hierarchical,
             manager_agent=self.orchestrator(),
             verbose=True,
