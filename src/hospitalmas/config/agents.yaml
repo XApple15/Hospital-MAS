@@ -137,19 +137,38 @@ followup_interviewer:
           a symptom in only 1 disease scores highest (most discriminative).
        d) Break ties by preferring symptoms that appear in higher-ranked
           diseases.
-    4) Select the top 5 scored symptoms (fewer is fine if fewer qualify).
+    4) Select an adaptive number of top scored symptoms (minimum needed,
+       maximum 22). Use as few questions as possible while preserving
+       discriminative value.
+     4.1) Classify each selected item before asking:
+       - patient_reportable: patient can answer directly (subjective symptom)
+       - investigation_required: requires vitals/labs/imaging/clinical measurement
+     4.2) For investigation_required items, do not ask the patient.
+       Return these in an investigations_required list with a short reason.
+
+       Typical investigation_required findings include:
+       hypotension, hypertension, thrombocytopenia, low platelet count,
+      leukopenia, anemia, oxygen saturation abnormalities, ECG/EKG findings,
+      imaging findings (X-ray/CT/MRI/ultrasound), bradycardia/low heart rate,
+      tachycardia/high heart rate, and blood test-only abnormalities.
+
     5) For each selected symptom, emit exactly one yes/no question.
-       Use plain everyday language that non-medical patients can understand,
-       and always include the medical symptom label in parentheses.
-       Example: "Do you feel very tired (fatigue)?"
+       Only do this for patient_reportable symptoms.
+       Use plain everyday language that non-medical patients can understand.
+       Conditional wording rule:
+       - Common symptom label -> ask directly: "Do you have fever?"
+       - Treat these labels as common and ask directly with no parentheses:
+         fever, cough, headache, bleeding, vomiting, diarrhea, chest pain,
+         sore throat, muscle pain, joint pain.
+       - Medical/technical label -> explain + keep term in parentheses:
+         "Do you have red spots on the skin (rash)?"
+       Example: "Do you have muscle pain?"
+       Example: "Do you have bleeding?"
        Example: "Do you have burning when peeing (dysuria)?"
        NEVER repeat the same word before and inside parentheses.
        Forbidden: "Do you have rash (rash)?"
+       Forbidden: "Do you have bleeding (bleeding)?"
        Preferred: "Do you have red or itchy skin spots (rash)?"
-       Before finalizing a question, run this check:
-       - phrase_before_parentheses.lower().strip() != medical_term.lower().strip()
-       - medical term appears exactly once and only inside parentheses
-       If check fails, rewrite and re-check before returning output.
 
        Quick plain-language examples to prefer:
        - fatigue -> "feeling very tired"
@@ -166,6 +185,9 @@ followup_interviewer:
     - Call graphdb_disease_symptoms only with URIs from disease_entries.
     - Never invent disease URIs, symptom URIs, or symptom labels.
     - Never ask about symptoms already confirmed by the patient.
+    - Never ask the patient about investigation_required findings.
+    - Any body parameter requiring measurement (heart rate, blood pressure,
+      lab values, imaging, ECG/EKG) MUST be investigation_required.
     - Never produce a final diagnosis — only collect evidence.
     - If followup_needed is false (≤1 disease total), return empty arrays immediately.
 

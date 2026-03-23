@@ -44,77 +44,20 @@ def _build_patient_question(symptom: str, suggested_question: str) -> str:
 
     clean_q = re.sub(r"\s+", " ", (suggested_question or "").strip())
     if not clean_q:
-        return f"Do you currently have this symptom ({clean_symptom})?"
+        return f"Do you currently have {clean_symptom}?"
 
     # If the generated question appears multi-part, replace with a strict template.
     if clean_q.count("?") > 1 or ", and " in clean_q.lower() or " or " in clean_q.lower():
-        return f"Do you currently have this symptom ({clean_symptom})?"
+        return f"Do you currently have {clean_symptom}?"
 
     if clean_q[-1] != "?":
         clean_q = f"{clean_q}?"
 
     # Keep wording short and clear for terminal UX.
     if len(clean_q.split()) > 16:
-        return f"Do you currently have this symptom ({clean_symptom})?"
-
-    # Always include the medical term in parentheses.
-    if f"({clean_symptom})" not in clean_q:
-        clean_q = clean_q.rstrip("?").strip()
-        clean_q = f"{clean_q} ({clean_symptom})?"
+        return f"Do you currently have {clean_symptom}?"
 
     return clean_q
-
-
-def _confirmed_yes_symptoms(followup_payload: dict[str, Any]) -> list[str]:
-    """Return unique symptom labels that were confirmed with a yes answer."""
-    symptoms: list[str] = []
-    seen: set[str] = set()
-
-    for q in followup_payload.get("questions_asked", []) or []:
-        if not isinstance(q, dict):
-            continue
-        answer = str(q.get("patient_answer", "")).strip().lower()
-        if answer != "yes":
-            continue
-        symptom = str(q.get("symptom", "")).strip()
-        if not symptom:
-            continue
-        key = symptom.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        symptoms.append(symptom)
-
-    return symptoms
-
-
-def _merge_existing_answers(
-    old_followup_payload: dict[str, Any],
-    new_followup_payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Copy already answered symptoms into a regenerated follow-up payload."""
-    old_answers: dict[str, str] = {}
-
-    for q in old_followup_payload.get("questions_asked", []) or []:
-        if not isinstance(q, dict):
-            continue
-        symptom = str(q.get("symptom", "")).strip()
-        answer = str(q.get("patient_answer", "")).strip()
-        if not symptom or not answer:
-            continue
-        old_answers[symptom.casefold()] = answer
-
-    for q in new_followup_payload.get("questions_asked", []) or []:
-        if not isinstance(q, dict):
-            continue
-        symptom = str(q.get("symptom", "")).strip()
-        if not symptom:
-            continue
-        prev = old_answers.get(symptom.casefold())
-        if prev:
-            q["patient_answer"] = prev
-
-    return new_followup_payload
 
 
 def _run_phase1(user_message: str) -> tuple[Any, dict[str, Any], dict[str, Any]]:
@@ -192,6 +135,17 @@ def _collect_answers(followup_payload: dict[str, Any]) -> dict[str, Any]:
     if not followup_payload.get("followup_needed", False):
         print("\n[No follow-up needed — only one disease candidate found.]\n")
         return followup_payload
+
+    investigations = followup_payload.get("investigations_required", []) or []
+    if investigations:
+        print("\n[Clinical measurements/tests required before diagnosis refinement]")
+        for item in investigations:
+            if not isinstance(item, dict):
+                continue
+            finding = str(item.get("finding", "")).strip() or "unspecified finding"
+            reason = str(item.get("reason", "")).strip() or "requires clinical measurement"
+            print(f"- {finding}: {reason}")
+        print("")
 
     questions: list[dict] = followup_payload.get("questions_asked", [])
     deduped_questions: list[dict] = []
@@ -303,27 +257,6 @@ def run():
 
     # ── Human-in-the-loop: collect patient answers ─────────────────────────
     followup_with_answers = _collect_answers(followup_payload)
-
-    # ── Iterative improvement: re-run Phase 1 with confirmed follow-up symptoms ──
-    # This promotes patient-confirmed evidence into ontology mapping before final refinement.
-    confirmed_symptoms = _confirmed_yes_symptoms(followup_with_answers)
-    if confirmed_symptoms:
-        extra_context = "; ".join(confirmed_symptoms)
-        enriched_message = (
-            f"{user_message}\n"
-            f"Additional confirmed symptoms (yes answers): {extra_context}."
-        )
-        print("[Phase 1B] Re-running with confirmed follow-up symptoms...\n")
-
-        _, reranked_payload, refollowup_payload = _run_phase1(enriched_message)
-
-        if reranked_payload:
-            ranking_payload = reranked_payload
-        if refollowup_payload:
-            followup_with_answers = _merge_existing_answers(
-                followup_with_answers,
-                refollowup_payload,
-            )
 
     # ── Phase 2: refine diagnosis with answers ─────────────────────────────
     print("\n[Phase 2] Refining diagnosis...\n")

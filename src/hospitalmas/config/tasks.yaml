@@ -235,10 +235,36 @@ clarify_followup_symptoms_task:
            (lower rank number = higher priority).
 
     Step 4 - Select questions.
-      Take the top 5 symptoms by discriminative score.
-      For each selected symptom, emit exactly one yes/no question in plain
-      clinical language using this preferred template:
-        "Do you currently have <simple everyday wording> (<medical term>)?"
+      Select an adaptive number of symptoms from highest discriminative score,
+      asking as few questions as possible while still separating top diagnoses.
+      Maximum allowed patient questions: 22.
+      Before creating patient questions, classify each selected symptom as either:
+      - patient_reportable (can be answered directly by the patient), or
+      - investigation_required (needs vitals/labs/imaging/clinical measurement).
+
+      Investigation-required examples:
+      hypotension, hypertension, thrombocytopenia, low platelet count,
+      leukopenia, anemia, elevated CRP, elevated liver enzymes, oxygen saturation,
+      ECG/EKG findings, CT/MRI/X-ray findings, bradycardia, tachycardia,
+      low heart rate, high heart rate, and blood-test-only abnormalities.
+
+      For investigation_required items:
+      - Do NOT create a patient yes/no question.
+      - Add them to an `investigations_required` list with a short reason.
+
+      For patient_reportable items only, create yes/no questions.
+      For each selected symptom, emit exactly one yes/no question using this
+      conditional style:
+      - If the symptom is a common everyday term (e.g., fever, cough, headache),
+        ask directly: "Do you have <symptom>?"
+      - Treat these as common everyday terms and ask directly with no
+        parentheses: fever, cough, headache, bleeding, vomiting, diarrhea,
+        chest pain, sore throat, muscle pain, joint pain.
+      - If the symptom is a medical/technical term (e.g., rash, dysuria,
+        dyspnea), ask with a plain explanation plus the term in parentheses:
+        "Do you have <simple explanation> (<medical term>)?"
+        Example: "Do you have red spots on the skin (rash)?"
+      
       If needed for grammar, a close equivalent is allowed, but it MUST remain
       a single yes/no question about exactly one symptom.
       Keep each question short (max 14 words), patient-friendly, and avoid
@@ -246,28 +272,35 @@ clarify_followup_symptoms_task:
       Do not ask severity, duration, or cause in the same question.
       IMPORTANT language policy:
       - Use easy, non-technical wording so any patient can understand.
-      - Always include the original medical term/symptom label in parentheses.
-      - Example: "Do you feel very tired (fatigue)?"
-      - Example: "Do you have yellow skin or eyes (jaundice)?"
+      - Include parentheses only when the symptom label is medical/technical.
+      - Common everyday symptom names should NOT be rewritten with parentheses.
+      - Example common: "Do you have fever?"
+      - Example common: "Do you have bleeding?"
+      - Example medical: "Do you have yellow skin or eyes (jaundice)?"
       - The wording before parentheses MUST explain the symptom in plain words,
         not repeat the same medical label.
       - FORBIDDEN example: "Do you have rash (rash)?"
+      - FORBIDDEN example: "Do you have bleeding (bleeding)?"
       - CORRECT example: "Do you have red or itchy skin spots (rash)?"
       Global deduplication: never emit the same symptom question twice.
       Skip any symptom that already has a non-empty patient_answer in the
-      input context (this task may be re-run; skip already-answered questions).
+      input context.
 
     ABSOLUTE RULES:
     - Call graphdb_disease_symptoms ONLY with URIs from disease_entries.
     - Never invent disease URIs, symptom URIs, or symptom labels.
     - Never ask about a symptom the patient already confirmed.
+    - Never ask the patient about findings that require tests or measurements.
+    - Any body parameter requiring measurement (heart rate, blood pressure,
+      oxygen saturation, lab values, ECG/EKG, imaging) MUST be investigation_required.
+    - Put test/measurement findings only in `investigations_required`.
     - Never produce or suggest a final diagnosis in this step.
     - questions_asked must contain no duplicate symptom entries.
     - Each question must end with "?" and be answerable by yes/no only.
     - Each question must reference exactly one symptom from candidate_symptoms.
-    - Each question must include the medical term in parentheses: "(... )".
-    - Text before parentheses must be semantically explanatory and MUST NOT be
-      identical to the parenthesized medical term (case-insensitive).
+    - For medical/technical symptoms, include the medical term in parentheses.
+    - For common symptoms, do not add parentheses unless needed for clarity.
+    - Never output "<term> (<term>)" for any symptom.
   expected_output: >
     A JSON object with keys:
       "followup_needed": boolean — true only when total_diseases_found > 1
@@ -276,10 +309,13 @@ clarify_followup_symptoms_task:
         "disease_uri": disease URI string from disease_entries, or null
         "candidate_symptoms": list of symptom label strings from graphdb_disease_symptoms tool
         "status": one of "profiled" | "skipped_for_followup" | "tool_failure"
-      "questions_asked": list of question objects, max 5:
+      "questions_asked": list of question objects, max 22:
         "symptom": the symptom label string used to generate the question
         "question": the yes/no question text to present to the patient
         "patient_answer": null  ← always null at output time; filled externally
+      "investigations_required": list of objects:
+        "finding": symptom/finding label that should not be asked directly
+        "reason": brief reason, e.g. "requires measurement or laboratory/imaging investigation"
       "notes": brief summary — number of diseases profiled, symptoms in pool,
                questions selected, and any skipped diseases
   agent: followup_interviewer
