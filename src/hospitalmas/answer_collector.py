@@ -54,20 +54,11 @@ def normalize_answer(raw: str) -> str:
 
 
 def build_patient_question(symptom: str, suggested_question: str) -> str:
-    """Ensure the question is concise, single-symptom, and yes/no friendly."""
+    """Preserve the agent-generated question; fallback only when missing."""
     clean_symptom = re.sub(r"\s+", " ", symptom.strip()) or "this symptom"
     clean_q = re.sub(r"\s+", " ", (suggested_question or "").strip())
 
     if not clean_q:
-        return f"Do you currently have {clean_symptom}?"
-
-    if clean_q.count("?") > 1 or ", and " in clean_q.lower() or " or " in clean_q.lower():
-        return f"Do you currently have {clean_symptom}?"
-
-    if clean_q[-1] != "?":
-        clean_q = f"{clean_q}?"
-
-    if len(clean_q.split()) > 16:
         return f"Do you currently have {clean_symptom}?"
 
     return clean_q

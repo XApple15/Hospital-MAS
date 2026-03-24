@@ -150,6 +150,40 @@
     cursor: not-allowed;
   }
 
+  .btn-secondary {
+    background: var(--bg-subtle);
+    color: var(--text);
+    border: 1px solid var(--border);
+    margin-top: 1rem;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--border);
+  }
+
+  .btn-danger {
+    background: #B84B3D;
+    color: #fff;
+    border: 1px solid #A13D31;
+    margin-top: 1rem;
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    background: #9F3F32;
+  }
+
+  .intake-actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .intake-meta {
+    margin-top: 0.75rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+
   .btn-answer {
     background: var(--green);
     color: #fff;
@@ -388,9 +422,18 @@
     <div class="card">
       <div class="card-label">Describe your symptoms</div>
       <textarea id="symptom-input" placeholder="e.g. I have had a persistent dry cough for two weeks, chest tightness, and shortness of breath when walking upstairs."></textarea>
-      <button class="btn btn-primary" id="start-btn" onclick="startDiagnosis()">
-        Begin analysis
-      </button>
+      <div class="intake-actions">
+        <button class="btn btn-primary" id="start-btn" onclick="startDiagnosis()">
+          Begin analysis
+        </button>
+        <button class="btn btn-danger hidden" id="abort-btn" onclick="abortConsultation()">
+          Abort consultation
+        </button>
+        <button class="btn btn-secondary hidden" id="new-btn" onclick="newConsultation()">
+          New consultation
+        </button>
+      </div>
+      <p id="intake-meta" class="intake-meta hidden"></p>
     </div>
   </div>
 
@@ -477,9 +520,61 @@ let sessionId = null;
 let eventSource = null;
 let currentQuestion = null;
 let answeredQuestions = [];
+let consultationActive = false;
 
 function show(id)  { document.getElementById(id).classList.remove('hidden'); }
 function hide(id)  { document.getElementById(id).classList.add('hidden'); }
+
+function setIntakeMeta(text = '') {
+  const el = document.getElementById('intake-meta');
+  if (!text) {
+    el.textContent = '';
+    hide('intake-meta');
+    return;
+  }
+  el.textContent = text;
+  show('intake-meta');
+}
+
+function setConsultationState(active) {
+  consultationActive = active;
+  const input = document.getElementById('symptom-input');
+  const startBtn = document.getElementById('start-btn');
+
+  input.readOnly = active;
+  startBtn.disabled = active;
+
+  if (active) {
+    show('abort-btn');
+    show('new-btn');
+  } else {
+    hide('abort-btn');
+    show('new-btn');
+  }
+}
+
+function resetUiForNewConsultation() {
+  hide('processing-section');
+  hide('investigations-section');
+  hide('question-section');
+  hide('answered-section');
+  hide('refining-section');
+  hide('result-section');
+
+  document.getElementById('investigations-list').innerHTML = '';
+  document.getElementById('answered-list').innerHTML = '';
+  document.getElementById('result-list').innerHTML = '';
+  document.getElementById('result-summary').textContent = '';
+  document.getElementById('summary-card').classList.add('hidden');
+
+  answeredQuestions = [];
+  currentQuestion = null;
+  sessionId = null;
+
+  document.getElementById('symptom-input').value = '';
+  setIntakeMeta('Ready for a new consultation.');
+  setConsultationState(false);
+}
 
 // ── Start diagnosis ──────────────────────────────────────────────
 
@@ -487,8 +582,8 @@ async function startDiagnosis() {
   const msg = document.getElementById('symptom-input').value.trim();
   if (!msg) return;
 
-  document.getElementById('start-btn').disabled = true;
-  hide('intake-section');
+  setConsultationState(true);
+  setIntakeMeta('Consultation in progress. Your submitted symptoms remain visible.');
   show('processing-section');
 
   try {
@@ -503,7 +598,41 @@ async function startDiagnosis() {
   } catch (err) {
     document.getElementById('status-text').textContent =
       'Connection error — is the server running?';
+    setIntakeMeta('Connection error. You can try again or start a new consultation.');
+    setConsultationState(false);
   }
+}
+
+async function abortConsultation() {
+  if (!sessionId) {
+    setIntakeMeta('No active consultation to abort.');
+    return;
+  }
+
+  try {
+    await fetch(`${API}/api/abort/${sessionId}`, { method: 'POST' });
+  } catch (err) {
+    console.error('Abort request failed:', err);
+  }
+
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+
+  hide('processing-section');
+  hide('question-section');
+  hide('refining-section');
+  setIntakeMeta('Consultation aborted. You can edit symptoms and start again.');
+  setConsultationState(false);
+}
+
+function newConsultation() {
+  if (consultationActive) {
+    abortConsultation().finally(() => resetUiForNewConsultation());
+    return;
+  }
+  resetUiForNewConsultation();
 }
 
 // ── SSE listener ─────────────────────────────────────────────────
@@ -518,6 +647,18 @@ function listenForQuestions() {
       eventSource.close();
       document.getElementById('status-text').textContent =
         `Error: ${data.error}`;
+      setIntakeMeta(`Error: ${data.error}`);
+      setConsultationState(false);
+      return;
+    }
+
+    if (data.aborted) {
+      eventSource.close();
+      hide('processing-section');
+      hide('question-section');
+      hide('refining-section');
+      setIntakeMeta('Consultation aborted. You can edit symptoms and start again.');
+      setConsultationState(false);
       return;
     }
 
@@ -685,6 +826,8 @@ function showResult(result) {
   }
 
   show('result-section');
+  setIntakeMeta('Consultation complete. Start a new one anytime.');
+  setConsultationState(false);
 }
 
 // ── Utility ──────────────────────────────────────────────────────
@@ -694,6 +837,9 @@ function esc(str) {
   d.textContent = str || '';
   return d.innerHTML;
 }
+
+setConsultationState(false);
+setIntakeMeta('');
 </script>
 </body>
 </html>

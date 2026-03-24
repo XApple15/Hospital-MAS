@@ -244,6 +244,15 @@ clarify_followup_symptoms_task:
       - investigation_required, OR
       - patient_reportable
 
+      PRIORITY OVERRIDE (apply first):
+      If the symptom is directly observable or directly experienceable by the patient,
+      classify it as patient_reportable EVEN IF the term is medical/technical.
+      Examples that are patient_reportable (not investigation_required):
+      epistaxis, nasal bleeding, gum bleeding, visible bleeding, bruising,
+      skin rash, swelling, vomiting, diarrhea, headache, muscle pain, joint pain.
+      Do not classify these as investigation_required unless the label explicitly
+      contains a measurement/test context (e.g., "measured", "lab-confirmed").
+
       INVESTIGATION_REQUIRED classification rule:
       Apply these checks IN ORDER. If ANY apply, classify as investigation_required:
       1. Does it require specialized equipment to detect? (BP cuff, oximeter, ECG, lab machine, imaging)
@@ -262,6 +271,8 @@ clarify_followup_symptoms_task:
       2. Patient can directly observe it? (bleeding they see, rash/spots they see, swelling they feel)
       3. Patient can describe it without equipment? (Yes = patient_reportable)
       4. It's a subjective symptom or patient-observable sign? (Yes = patient_reportable)
+      5. If it is a body-site bleeding term (epistaxis/nasal bleeding/gum bleeding),
+        classify as patient_reportable.
 
       ★★★ MANDATORY SEPARATION STEP ★★★
       STEP B: Create TWO SEPARATE LISTS after classification:
@@ -322,6 +333,8 @@ clarify_followup_symptoms_task:
     ★★★ CRITICAL: Do NOT add FILTER(LANG(...)) or any filters NOT shown in the patterns.
     ★★★ CRITICAL: Deviating from patterns = zero results = failed queries. Follow patterns exactly.
     ★★★ CRITICAL: Use reasoning—not hardcoded lists—to classify each symptom as investigation_required or patient_reportable.
+    ★★★ CRITICAL: Patient-observable bleeding findings (epistaxis, nasal bleeding, gum bleeding)
+    must be patient_reportable unless the label explicitly indicates measured/test-only context.
     ★★★ CRITICAL: Create TWO SEPARATE LISTS after classification (investigation_required and patient_reportable).
     ★★★ CRITICAL: investigation_required symptoms MUST NOT appear in questions_asked under ANY circumstance.
     ★★★ CRITICAL: Do NOT ask about hypotension, shock, thrombocytopenia, or ANY investigation_required finding.

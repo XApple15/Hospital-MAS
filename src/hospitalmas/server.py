@@ -42,6 +42,14 @@ class AnswerRequest(BaseModel):
     answer: str
 
 
+def _session_response(session_id: str, status: str, message: str) -> dict[str, str]:
+    return {
+        "session_id": session_id,
+        "status": status,
+        "message": message,
+    }
+
+
 # ── Serve the frontend ────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -63,6 +71,7 @@ async def diagnose(req: DiagnoseRequest):
         "result": None,
         "error": None,
         "initial_ranking": None,
+        "aborted": False,
     }
 
     async def _run():
@@ -73,6 +82,10 @@ async def diagnose(req: DiagnoseRequest):
                 log_file=_build_runtime_log_file(),
             )
             _sessions[session_id]["result"] = result
+        except asyncio.CancelledError:
+            _sessions[session_id]["aborted"] = True
+            _sessions[session_id]["error"] = "Consultation aborted by user."
+            raise
         except Exception as e:
             _sessions[session_id]["error"] = str(e)
 
@@ -92,6 +105,10 @@ async def stream_questions(session_id: str):
 
     async def event_generator():
         while True:
+            if session.get("aborted"):
+                yield f"data: {json.dumps({'aborted': True, 'message': 'Consultation aborted'})}\n\n"
+                return
+
             if session["error"] is not None:
                 yield f"data: {json.dumps({'error': session['error']})}\n\n"
                 return
@@ -137,6 +154,26 @@ async def submit_answer(session_id: str, req: AnswerRequest):
 
     await session["collector"].submit_answer(req.answer)
     return {"status": "received"}
+
+
+# ── POST /api/abort/{id} — abort a running consultation ─────────────────────
+
+@app.post("/api/abort/{session_id}")
+async def abort_session(session_id: str):
+    session = _sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    session["aborted"] = True
+    task: asyncio.Task | None = session.get("task")
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    return _session_response(session_id, "aborted", "Consultation aborted")
 
 
 # ── GET /api/result/{id} — poll result ────────────────────────────────────────
