@@ -91,10 +91,25 @@ query_diseases_for_symptoms_task:
       Record this entry with disease_candidates set to [] and status "skipped".
 
     CASE B - status is "mapped" AND parsed_symp_number is a non-empty digit string:
-      You have to call the tool to find associated diseases for this known symptom.
-      Find diseases linked to a known symptom with parsed_symp_number by calling graphdb_ontology_query tool.
+      You have to call the tool to find associated diseases for this known symptom using its URI.
+      Use EXACTLY this SPARQL query. Replace ONLY <SYMPTOM_URI_PLACEHOLDER> with the actual
+      matched_symp_uri value in angle brackets (e.g. <http://purl.obolibrary.org/obo/SYMP_0000457>).
+      Do NOT change anything else in the query — not the variable names, not the property, not the structure.
+
+      PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+      PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+      PREFIX ro:   <http://purl.obolibrary.org/obo/RO_>
+      SELECT ?disease ?diseaseLabel
+      WHERE {
+        ?disease rdfs:subClassOf ?restriction .
+        ?restriction owl:onProperty ro:0002452 .
+        ?restriction owl:someValuesFrom <SYMPTOM_URI_PLACEHOLDER> .
+        ?disease rdfs:label ?diseaseLabel .
+        FILTER(LANG(?diseaseLabel) = "en")
+      }
+
       Call graphdb_ontology_query with:
-      {"sparql_query": "<full query string>"}
+      {"sparql_query": "<the query above with the real URI substituted>"}
 
       Read the "disease_candidates"
       array from tool result. Copy every string verbatim into
@@ -223,8 +238,11 @@ clarify_followup_symptoms_task:
     Step 3 - Build a global discriminative symptom pool.
       Collect every symptom label across all profiled diseases into one pool.
       Then apply these filters IN ORDER:
-        a) Remove symptoms already present in the initial patient message
-           (case-insensitive match against the original extracted symptom names).
+        a) Remove symptoms the patient already reported. Use the "symptoms"
+           list from the extract_symptoms_task output as the authoritative
+           reference list. Apply a case-insensitive match: if a candidate
+           symptom label matches any reported symptom (exact or substring),
+           drop it from the pool.
         b) Remove symptoms that appear in ALL candidate disease profiles
            (they cannot discriminate between diseases).
         c) Score each remaining symptom by discriminative power:
@@ -244,15 +262,6 @@ clarify_followup_symptoms_task:
       - investigation_required, OR
       - patient_reportable
 
-      PRIORITY OVERRIDE (apply first):
-      If the symptom is directly observable or directly experienceable by the patient,
-      classify it as patient_reportable EVEN IF the term is medical/technical.
-      Examples that are patient_reportable (not investigation_required):
-      epistaxis, nasal bleeding, gum bleeding, visible bleeding, bruising,
-      skin rash, swelling, vomiting, diarrhea, headache, muscle pain, joint pain.
-      Do not classify these as investigation_required unless the label explicitly
-      contains a measurement/test context (e.g., "measured", "lab-confirmed").
-
       INVESTIGATION_REQUIRED classification rule:
       Apply these checks IN ORDER. If ANY apply, classify as investigation_required:
       1. Does it require specialized equipment to detect? (BP cuff, oximeter, ECG, lab machine, imaging)
@@ -271,8 +280,6 @@ clarify_followup_symptoms_task:
       2. Patient can directly observe it? (bleeding they see, rash/spots they see, swelling they feel)
       3. Patient can describe it without equipment? (Yes = patient_reportable)
       4. It's a subjective symptom or patient-observable sign? (Yes = patient_reportable)
-      5. If it is a body-site bleeding term (epistaxis/nasal bleeding/gum bleeding),
-        classify as patient_reportable.
 
       ★★★ MANDATORY SEPARATION STEP ★★★
       STEP B: Create TWO SEPARATE LISTS after classification:
@@ -333,8 +340,6 @@ clarify_followup_symptoms_task:
     ★★★ CRITICAL: Do NOT add FILTER(LANG(...)) or any filters NOT shown in the patterns.
     ★★★ CRITICAL: Deviating from patterns = zero results = failed queries. Follow patterns exactly.
     ★★★ CRITICAL: Use reasoning—not hardcoded lists—to classify each symptom as investigation_required or patient_reportable.
-    ★★★ CRITICAL: Patient-observable bleeding findings (epistaxis, nasal bleeding, gum bleeding)
-    must be patient_reportable unless the label explicitly indicates measured/test-only context.
     ★★★ CRITICAL: Create TWO SEPARATE LISTS after classification (investigation_required and patient_reportable).
     ★★★ CRITICAL: investigation_required symptoms MUST NOT appear in questions_asked under ANY circumstance.
     ★★★ CRITICAL: Do NOT ask about hypotension, shock, thrombocytopenia, or ANY investigation_required finding.

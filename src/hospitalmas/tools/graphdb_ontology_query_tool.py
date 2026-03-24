@@ -101,8 +101,8 @@ class GraphDbOntologyQueryTool(BaseTool):
         "\n"
 
         # Pattern 3
-        "--- PATTERN 3: Find diseases linked to a known symptom ---\n"
-        "Use case: You have a symptom URI (SYMP) and need all diseases (DOID) that list it.\n"
+        "--- PATTERN 3: Find all diseases linked to a known symptom ---\n"
+        "Use case: You have a symptom URI (SYMP) and need all diseases (DOID) that list it. replace ONLY SYMPTOM_URI\n"
         "Placeholder: {{SYMPTOM_URI}} = full symptom URI in angle brackets.\n"
         "\n"
         "PREFIX owl:  <http://www.w3.org/2002/07/owl#>\n"
@@ -113,7 +113,6 @@ class GraphDbOntologyQueryTool(BaseTool):
         "  ?disease rdfs:subClassOf ?restriction .\n"
         "  ?restriction owl:onProperty ro:0002452 .\n"
         "  ?restriction owl:someValuesFrom {{SYMPTOM_URI}} .\n"
-        "  ?disease rdfs:label ?diseaseLabel .\n"
         "  ?disease rdfs:label ?diseaseLabel .\n"
         "  FILTER(LANG(?diseaseLabel) = \"en\")"
         "}\n"
@@ -138,11 +137,12 @@ class GraphDbOntologyQueryTool(BaseTool):
         "2. Do NOT modify the WHERE clause structure (no extra triples, no "
         "reordering, no optional blocks).\n"
         "3. Patterns 2 has NO language filters; results are returned as-is.\n"
-        "4. Replace only the {{ }} placeholder with your actual value. "
+        "4. Pattern 3 must remain symptom-to-disease only. Do NOT mix Pattern 2 triples into Pattern 3.\n"
+        "5. Replace only the {{ }} placeholder with your actual value. "
         "URIs go inside angle brackets: <http://...>.\n"
-        "5. Use data from tool responses ONLY. Never invent URIs, labels, or "
+        "6. Use data from tool responses ONLY. Never invent URIs, labels, or "
         "relation IDs from memory or examples.\n"
-        "6. All URIs you use must come from prior tool results or from "
+        "7. All URIs you use must come from prior tool results or from "
         "disease_entries provided by earlier pipeline stages.\n"
     )
     args_schema: Type[BaseModel] = GraphDbOntologyQueryToolInput

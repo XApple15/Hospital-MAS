@@ -160,6 +160,7 @@ class Hospitalmas():
             config=self.tasks_config['clarify_followup_symptoms_task'],
             agent=self.followup_interviewer(),
             context=[
+                self.extract_symptoms_task(),
                 self.query_diseases_for_symptoms_task(),
                 self.rank_diagnoses_task(),
             ],

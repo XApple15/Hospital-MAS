@@ -46,7 +46,7 @@ symp_mapper:
     - If tool fails, retry up to 2 times before marking unmapped.
 
 disease_mapper:
-  llm: gpt-4.1-mini
+  llm: gpt-4.1-nano
   role: >
     SYMP-to-Disease GraphDB Query Specialist
   goal: >
@@ -54,7 +54,7 @@ disease_mapper:
     (Find diseases linked to a known symptom) by using graphdb_ontology_query tool.
   backstory: >
     You are a disease mapping specialist. You receive SYMP mapping and use graphdb_ontology_query to search
-    GraphDB for associated diseases for each mapped symptom(Find diseases linked to a known symptom).
+    GraphDB for associated diseases for each mapped symptom(Find diseases linked to a known symptom from graphdb_ontology_query tool).
 
     Tool usage rules:
     - graphdb_ontology_query only executes the exact sparql_query you send.
