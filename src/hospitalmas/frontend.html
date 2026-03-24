@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HospitalMAS — Diagnostic Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root {
+    --bg: #FAF7F2;
+    --bg-card: #FFFFFF;
+    --bg-subtle: #F3EDE4;
+    --text: #2C2825;
+    --text-muted: #8A8078;
+    --accent: #C45D3E;
+    --accent-soft: #E8A490;
+    --accent-bg: #FDF0EC;
+    --green: #4A7C59;
+    --green-bg: #EDF5EF;
+    --border: #E5DDD4;
+    --shadow: 0 1px 3px rgba(44,40,37,.06), 0 8px 24px rgba(44,40,37,.04);
+    --shadow-lg: 0 4px 12px rgba(44,40,37,.08), 0 24px 48px rgba(44,40,37,.06);
+    --radius: 12px;
+    --font-heading: 'DM Serif Display', Georgia, serif;
+    --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
+  }
+
+  html { font-size: 16px; }
+
+  body {
+    font-family: var(--font-body);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.6;
+  }
+
+  /* ── Layout ───────────────────────────────────────────── */
+
+  .shell {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+
+  header {
+    text-align: center;
+    padding: 2.5rem 0 2rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2.5rem;
+  }
+
+  header h1 {
+    font-family: var(--font-heading);
+    font-size: 2rem;
+    font-weight: 400;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  header p {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-top: 0.35rem;
+  }
+
+  /* ── Cards ────────────────────────────────────────────── */
+
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.75rem;
+    box-shadow: var(--shadow);
+    margin-bottom: 1.5rem;
+    animation: cardIn .4s ease both;
+  }
+
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .card-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+  }
+
+  /* ── Input area ───────────────────────────────────────── */
+
+  #intake-section textarea {
+    width: 100%;
+    min-height: 110px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    font-family: var(--font-body);
+    font-size: 0.95rem;
+    line-height: 1.55;
+    color: var(--text);
+    background: var(--bg);
+    resize: vertical;
+    transition: border-color .2s;
+  }
+
+  #intake-section textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  #intake-section textarea::placeholder {
+    color: var(--text-muted);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.65rem 1.4rem;
+    font-family: var(--font-body);
+    font-size: 0.88rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .2s;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    margin-top: 1rem;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: #B04E32;
+    box-shadow: 0 2px 8px rgba(196,93,62,.25);
+  }
+
+  .btn-primary:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+  }
+
+  .btn-answer {
+    background: var(--green);
+    color: #fff;
+    padding: 0.55rem 1.2rem;
+    font-size: 0.85rem;
+  }
+
+  .btn-answer:hover:not(:disabled) {
+    background: #3D6A4A;
+  }
+
+  .btn-pill {
+    background: var(--bg-subtle);
+    color: var(--text);
+    padding: 0.45rem 1rem;
+    font-size: 0.82rem;
+    font-weight: 500;
+    border-radius: 100px;
+    border: 1px solid var(--border);
+  }
+
+  .btn-pill:hover {
+    background: var(--border);
+  }
+
+  .btn-pill.active {
+    background: var(--accent-bg);
+    border-color: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  /* ── Processing state ─────────────────────────────────── */
+
+  .processing-bar {
+    height: 3px;
+    background: var(--bg-subtle);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+  }
+
+  .processing-bar .track {
+    height: 100%;
+    width: 30%;
+    background: var(--accent);
+    border-radius: 2px;
+    animation: slide 1.4s ease-in-out infinite;
+  }
+
+  @keyframes slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+  }
+
+  .status-text {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  /* ── Questions ────────────────────────────────────────── */
+
+  .question-counter {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+  }
+
+  .question-text {
+    font-size: 1.1rem;
+    font-weight: 500;
+    margin-bottom: 1.1rem;
+    line-height: 1.5;
+  }
+
+  .quick-answers {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+  }
+
+  .answer-input-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .answer-input-row input {
+    flex: 1;
+    padding: 0.55rem 0.85rem;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    background: var(--bg);
+    color: var(--text);
+    transition: border-color .2s;
+  }
+
+  .answer-input-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  /* ── Answered log ─────────────────────────────────────── */
+
+  .answered-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--bg-subtle);
+    font-size: 0.88rem;
+  }
+
+  .answered-item:last-child { border-bottom: none; }
+
+  .answered-item .q { color: var(--text); flex: 1; }
+
+  .answered-item .a {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 0.15rem 0.55rem;
+    border-radius: 4px;
+    margin-left: 1rem;
+    white-space: nowrap;
+  }
+
+  .a-yes { background: var(--green-bg); color: var(--green); }
+  .a-no { background: #FDF0EC; color: var(--accent); }
+  .a-neutral { background: var(--bg-subtle); color: var(--text-muted); }
+
+  /* ── Investigations ───────────────────────────────────── */
+
+  .investigation-item {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--bg-subtle);
+    font-size: 0.88rem;
+  }
+
+  .investigation-item:last-child { border-bottom: none; }
+
+  .investigation-finding {
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .investigation-reason {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    margin-top: 0.1rem;
+  }
+
+  /* ── Results ──────────────────────────────────────────── */
+
+  .result-disease {
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--bg-subtle);
+  }
+
+  .result-disease:last-child { border-bottom: none; }
+
+  .result-rank {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .result-name {
+    font-family: var(--font-heading);
+    font-size: 1.15rem;
+    font-weight: 400;
+    margin: 0.15rem 0 0.3rem;
+  }
+
+  .confidence-badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.15rem 0.55rem;
+    border-radius: 4px;
+  }
+
+  .conf-HIGH   { background: var(--green-bg); color: var(--green); }
+  .conf-MEDIUM { background: #FFF8E1; color: #A67C00; }
+  .conf-LOW    { background: var(--bg-subtle); color: var(--text-muted); }
+
+  .result-reasoning {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.4rem;
+    line-height: 1.5;
+  }
+
+  .result-summary {
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  /* ── Disclaimer ───────────────────────────────────────── */
+
+  .disclaimer {
+    text-align: center;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ── Utility ──────────────────────────────────────────── */
+
+  .hidden { display: none !important; }
+
+  .fade-in {
+    animation: cardIn .35s ease both;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header>
+    <h1>HospitalMAS</h1>
+    <p>Ontology-driven differential diagnosis assistant</p>
+  </header>
+
+  <!-- ── Step 1: Symptom intake ──────────────────────────── -->
+  <div id="intake-section">
+    <div class="card">
+      <div class="card-label">Describe your symptoms</div>
+      <textarea id="symptom-input" placeholder="e.g. I have had a persistent dry cough for two weeks, chest tightness, and shortness of breath when walking upstairs."></textarea>
+      <button class="btn btn-primary" id="start-btn" onclick="startDiagnosis()">
+        Begin analysis
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Step 2: Processing indicator ────────────────────── -->
+  <div id="processing-section" class="hidden">
+    <div class="card">
+      <div class="card-label">Phase 1 — Analysing symptoms</div>
+      <div class="processing-bar"><div class="track"></div></div>
+      <p class="status-text" id="status-text">
+        Extracting symptoms and querying the medical ontology…
+      </p>
+    </div>
+  </div>
+
+  <!-- ── Step 3: Investigations (if any) ─────────────────── -->
+  <div id="investigations-section" class="hidden">
+    <div class="card">
+      <div class="card-label">Investigations required</div>
+      <p style="font-size:.88rem;color:var(--text-muted);margin-bottom:.75rem;">
+        These findings require clinical measurement or lab work and cannot be self-reported.
+      </p>
+      <div id="investigations-list"></div>
+    </div>
+  </div>
+
+  <!-- ── Step 4: Follow-up questions ─────────────────────── -->
+  <div id="question-section" class="hidden">
+    <div class="card" id="question-card">
+      <div class="card-label">Follow-up question</div>
+      <div class="question-counter" id="question-counter"></div>
+      <div class="question-text" id="question-text"></div>
+      <div class="quick-answers">
+        <button class="btn btn-pill" onclick="quickAnswer('yes')">Yes</button>
+        <button class="btn btn-pill" onclick="quickAnswer('no')">No</button>
+        <button class="btn btn-pill" onclick="quickAnswer('unsure')">Unsure</button>
+      </div>
+      <div class="answer-input-row">
+        <input type="text" id="answer-input" placeholder="Or type your answer…"
+               onkeydown="if(event.key==='Enter')submitAnswer()">
+        <button class="btn btn-answer" onclick="submitAnswer()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Answered questions log ───────────────────────────── -->
+  <div id="answered-section" class="hidden">
+    <div class="card">
+      <div class="card-label">Your answers</div>
+      <div id="answered-list"></div>
+    </div>
+  </div>
+
+  <!-- ── Step 5: Refining ─────────────────────────────────── -->
+  <div id="refining-section" class="hidden">
+    <div class="card">
+      <div class="card-label">Phase 2 — Refining diagnosis</div>
+      <div class="processing-bar"><div class="track"></div></div>
+      <p class="status-text">Applying your answers to re-rank disease candidates…</p>
+    </div>
+  </div>
+
+  <!-- ── Step 6: Results ──────────────────────────────────── -->
+  <div id="result-section" class="hidden">
+    <div class="card">
+      <div class="card-label">Differential diagnosis</div>
+      <div id="result-list"></div>
+    </div>
+    <div class="card" id="summary-card" class="hidden">
+      <div class="card-label">Summary</div>
+      <p class="result-summary" id="result-summary"></p>
+    </div>
+  </div>
+
+  <p class="disclaimer">
+    This tool is for educational and research purposes only.<br>
+    It does not replace professional medical advice or diagnosis.
+  </p>
+
+</div>
+
+<script>
+const API = window.location.origin;
+let sessionId = null;
+let eventSource = null;
+let currentQuestion = null;
+let answeredQuestions = [];
+
+function show(id)  { document.getElementById(id).classList.remove('hidden'); }
+function hide(id)  { document.getElementById(id).classList.add('hidden'); }
+
+// ── Start diagnosis ──────────────────────────────────────────────
+
+async function startDiagnosis() {
+  const msg = document.getElementById('symptom-input').value.trim();
+  if (!msg) return;
+
+  document.getElementById('start-btn').disabled = true;
+  hide('intake-section');
+  show('processing-section');
+
+  try {
+    const res = await fetch(`${API}/api/diagnose`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_message: msg }),
+    });
+    const data = await res.json();
+    sessionId = data.session_id;
+    listenForQuestions();
+  } catch (err) {
+    document.getElementById('status-text').textContent =
+      'Connection error — is the server running?';
+  }
+}
+
+// ── SSE listener ─────────────────────────────────────────────────
+
+function listenForQuestions() {
+  eventSource = new EventSource(`${API}/api/questions/${sessionId}`);
+
+  eventSource.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    if (data.error) {
+      eventSource.close();
+      document.getElementById('status-text').textContent =
+        `Error: ${data.error}`;
+      return;
+    }
+
+    if (data.done) {
+      eventSource.close();
+      showResult(data.result);
+      return;
+    }
+
+    // Show investigations if attached to first question
+    if (data.investigations && data.investigations.length > 0) {
+      renderInvestigations(data.investigations);
+    }
+
+    hide('processing-section');
+    showQuestion(data);
+  };
+
+  eventSource.onerror = () => {
+    // SSE reconnects automatically; heartbeats keep it alive
+  };
+}
+
+// ── Render investigations ────────────────────────────────────────
+
+function renderInvestigations(investigations) {
+  const container = document.getElementById('investigations-list');
+  container.innerHTML = investigations.map(inv => `
+    <div class="investigation-item">
+      <div class="investigation-finding">${esc(inv.finding || 'Unknown')}</div>
+      <div class="investigation-reason">${esc(inv.reason || '')}</div>
+    </div>
+  `).join('');
+  show('investigations-section');
+}
+
+// ── Show a question ──────────────────────────────────────────────
+
+function showQuestion(data) {
+  currentQuestion = data;
+  document.getElementById('question-counter').textContent =
+    `Question ${data.index} of ${data.total}`;
+  document.getElementById('question-text').textContent = data.question;
+  document.getElementById('answer-input').value = '';
+
+  show('question-section');
+  document.getElementById('answer-input').focus();
+
+  // Highlight quick-answer buttons
+  document.querySelectorAll('.quick-answers .btn-pill').forEach(b =>
+    b.classList.remove('active'));
+}
+
+// ── Quick answer buttons ─────────────────────────────────────────
+
+function quickAnswer(value) {
+  document.getElementById('answer-input').value = value;
+  document.querySelectorAll('.quick-answers .btn-pill').forEach(b => {
+    b.classList.toggle('active', b.textContent.trim().toLowerCase() === value);
+  });
+  submitAnswer();
+}
+
+// ── Submit answer ────────────────────────────────────────────────
+
+async function submitAnswer() {
+  const input = document.getElementById('answer-input');
+  const answer = input.value.trim();
+  if (!answer || !currentQuestion) return;
+
+  // Record in answered log
+  answeredQuestions.push({
+    question: currentQuestion.question,
+    symptom: currentQuestion.symptom,
+    answer: answer,
+  });
+  renderAnsweredLog();
+
+  // Hide question while waiting for next one
+  hide('question-section');
+
+  // If this was the last question, show refining state
+  if (currentQuestion.index === currentQuestion.total) {
+    show('refining-section');
+  }
+
+  currentQuestion = null;
+
+  try {
+    await fetch(`${API}/api/answer/${sessionId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answer }),
+    });
+  } catch (err) {
+    console.error('Failed to submit answer:', err);
+  }
+}
+
+// ── Answered log ─────────────────────────────────────────────────
+
+function renderAnsweredLog() {
+  const container = document.getElementById('answered-list');
+  container.innerHTML = answeredQuestions.map(a => {
+    const norm = normalizeForDisplay(a.answer);
+    return `
+      <div class="answered-item">
+        <span class="q">${esc(a.question)}</span>
+        <span class="a a-${norm}">${norm}</span>
+      </div>
+    `;
+  }).join('');
+  show('answered-section');
+}
+
+function normalizeForDisplay(raw) {
+  const t = raw.trim().toLowerCase();
+  if (['yes','y','yeah','yep','da','sigur'].includes(t)) return 'yes';
+  if (['no','n','nope','nah','nu'].includes(t)) return 'no';
+  return 'neutral';
+}
+
+// ── Show final result ────────────────────────────────────────────
+
+function showResult(result) {
+  hide('processing-section');
+  hide('refining-section');
+  hide('question-section');
+
+  const diseases = result.refined_differential_diagnosis
+    || result.differential_diagnosis
+    || [];
+
+  const container = document.getElementById('result-list');
+
+  if (diseases.length === 0) {
+    container.innerHTML = `
+      <p style="color:var(--text-muted);font-size:.9rem;">
+        No disease candidates were identified from the ontology.
+      </p>`;
+    show('result-section');
+    return;
+  }
+
+  container.innerHTML = diseases.map(d => `
+    <div class="result-disease">
+      <div class="result-rank">#${d.rank}</div>
+      <div class="result-name">${esc(d.disease)}</div>
+      <span class="confidence-badge conf-${d.updated_confidence || d.confidence}">
+        ${d.updated_confidence || d.confidence}
+      </span>
+      ${d.reasoning
+        ? `<div class="result-reasoning">${esc(d.reasoning)}</div>`
+        : d.supporting_symptoms
+          ? `<div class="result-reasoning">Supported by: ${d.supporting_symptoms.map(esc).join(', ')}</div>`
+          : ''
+      }
+    </div>
+  `).join('');
+
+  const summary = result.followup_summary || result.notes || '';
+  if (summary) {
+    document.getElementById('result-summary').textContent = summary;
+    document.getElementById('summary-card').classList.remove('hidden');
+  }
+
+  show('result-section');
+}
+
+// ── Utility ──────────────────────────────────────────────────────
+
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
