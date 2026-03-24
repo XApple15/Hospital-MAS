@@ -1,0 +1,404 @@
+2026-03-24 12:51:50: task_name="extract_symptoms_task", task="Read the raw user clinical message: "i have bone pain". Extract ONLY symptoms explicitly present in the text. Do not infer diagnoses or add symptoms that are not stated. Include optional qualifiers when explicitly present (duration, location, onset). Return a clean symptom list ready for ontology matching.
+", agent="Clinical Workflow Orchestrator
+", status="started"
+2026-03-24 12:51:54: task_name="extract_symptoms_task", task="Read the raw user clinical message: "i have bone pain". Extract ONLY symptoms explicitly present in the text. Do not infer diagnoses or add symptoms that are not stated. Include optional qualifiers when explicitly present (duration, location, onset). Return a clean symptom list ready for ontology matching.
+", agent="Clinical Workflow Orchestrator
+", status="completed", output="{"symptoms":[{"name":"bone pain"}]}"
+2026-03-24 12:51:54: task_name="ontology_support_lookup_task", task="Universal ontology request task. You may receive any ontology need expressed as plain-language text from upstream context (for example: "I want all symptoms with label pain"). Your job is to translate each request into valid read-only SPARQL that fits the target ontology and relation hints.
+For each ontology request: 1) Read request text and target ontology hints from context.
+   Use these hints when present:
+   - ontology_name
+   - known_uris
+   - known_relation_ids (example: RO:0002452)
+   - expected_fields
+ 1.1) Use this ontology reference (extracted from validated snippets):
+   - Ontology roles in this project:
+     SYMP = symptom ontology
+     DOID = disease ontology
+     RO = relation ontology, including ro:0002452
+   - PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+   - PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+   - PREFIX doid: <http://purl.obolibrary.org/obo/DOID_>
+   - PREFIX ro:   <http://purl.obolibrary.org/obo/RO_>
+   - PREFIX symp: <http://purl.obolibrary.org/obo/SYMP_>
+   - Relation: ro:0002452 (has-symptom)
+   -symptom->disease pattern:
+    SELECT ?disease ?diseaseLabel
+                    WHERE {
+                    ?disease rdfs:subClassOf ?restriction .
+                    ?restriction owl:onProperty ro:0002452 .
+                    ?restriction owl:someValuesFrom symp:0020023 # example symptom URI 0020023
+
+                    ?disease rdfs:label ?diseaseLabel .
+                    FILTER(LANG(?diseaseLabel) = "en") # filtering is used only in this query
+                    }
+                    
+   - Disease->symptom query pattern:
+    <disease_uri> rdfs:subClassOf ?restriction .
+    ?restriction owl:onProperty ro:0002452 .
+    ?restriction owl:someValuesFrom ?symptom .
+    ?symptom rdfs:label ?symptomLabel .
+   - Case-insensitive label search pattern:
+    ?entity rdfs:label ?label .
+    FILTER(CONTAINS(LCASE(STR(?label)), "<text>"))
+    Do not filter by language tag in the query; return all labels.
+    Use STR() to safely handle language-tagged labels.
+2) Build SPARQL query using ontology-specific URIs/relation IDs. 3) Call graphdb_ontology_query with exactly:
+   {"sparql_query": "<full query string>"}
+4) Return both generated query and tool-backed results.
+ABSOLUTE RULES: - Use graphdb_ontology_query for every request item. - Map request intent correctly: symptom queries -> SYMP, disease queries -> DOID,
+  relation/property constraints -> RO.
+- Reuse the provided prefixes and relation pattern whenever request intent matches. - Never invent URI, label, relation ID, or ontology linkage. - If request is ambiguous, state assumptions in notes. - If no matches are returned, output empty results and status "no_match". - If tool fails, retry up to 2 times then return status "tool_failure".
+", agent="Clinical Workflow Orchestrator
+", status="started"
+2026-03-24 12:52:06: task_name="ontology_support_lookup_task", task="Universal ontology request task. You may receive any ontology need expressed as plain-language text from upstream context (for example: "I want all symptoms with label pain"). Your job is to translate each request into valid read-only SPARQL that fits the target ontology and relation hints.
+For each ontology request: 1) Read request text and target ontology hints from context.
+   Use these hints when present:
+   - ontology_name
+   - known_uris
+   - known_relation_ids (example: RO:0002452)
+   - expected_fields
+ 1.1) Use this ontology reference (extracted from validated snippets):
+   - Ontology roles in this project:
+     SYMP = symptom ontology
+     DOID = disease ontology
+     RO = relation ontology, including ro:0002452
+   - PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+   - PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+   - PREFIX doid: <http://purl.obolibrary.org/obo/DOID_>
+   - PREFIX ro:   <http://purl.obolibrary.org/obo/RO_>
+   - PREFIX symp: <http://purl.obolibrary.org/obo/SYMP_>
+   - Relation: ro:0002452 (has-symptom)
+   -symptom->disease pattern:
+    SELECT ?disease ?diseaseLabel
+                    WHERE {
+                    ?disease rdfs:subClassOf ?restriction .
+                    ?restriction owl:onProperty ro:0002452 .
+                    ?restriction owl:someValuesFrom symp:0020023 # example symptom URI 0020023
+
+                    ?disease rdfs:label ?diseaseLabel .
+                    FILTER(LANG(?diseaseLabel) = "en") # filtering is used only in this query
+                    }
+                    
+   - Disease->symptom query pattern:
+    <disease_uri> rdfs:subClassOf ?restriction .
+    ?restriction owl:onProperty ro:0002452 .
+    ?restriction owl:someValuesFrom ?symptom .
+    ?symptom rdfs:label ?symptomLabel .
+   - Case-insensitive label search pattern:
+    ?entity rdfs:label ?label .
+    FILTER(CONTAINS(LCASE(STR(?label)), "<text>"))
+    Do not filter by language tag in the query; return all labels.
+    Use STR() to safely handle language-tagged labels.
+2) Build SPARQL query using ontology-specific URIs/relation IDs. 3) Call graphdb_ontology_query with exactly:
+   {"sparql_query": "<full query string>"}
+4) Return both generated query and tool-backed results.
+ABSOLUTE RULES: - Use graphdb_ontology_query for every request item. - Map request intent correctly: symptom queries -> SYMP, disease queries -> DOID,
+  relation/property constraints -> RO.
+- Reuse the provided prefixes and relation pattern whenever request intent matches. - Never invent URI, label, relation ID, or ontology linkage. - If request is ambiguous, state assumptions in notes. - If no matches are returned, output empty results and status "no_match". - If tool fails, retry up to 2 times then return status "tool_failure".
+", agent="Clinical Workflow Orchestrator
+", status="completed", output="{"ontology_support_pack":[{"request_text":"bone pain","ontology_used":"Symptom Ontology (SYMP)","generated_sparql":"PREFIX owl: <http://www.w3.org/2002/07/owl#> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX doid: <http://purl.obolibrary.org/obo/DOID_> PREFIX ro: <http://purl.obolibrary.org/obo/RO_> PREFIX symp: <http://purl.obolibrary.org/obo/SYMP_> SELECT ?symptom ?symptomLabel WHERE { ?symptom rdfs:label ?symptomLabel . FILTER(CONTAINS(LCASE(STR(?symptomLabel)), \"bone pain\"))}","normalized_results":[{"symptom_uri":"http://purl.obolibrary.org/obo/SYMP_0020023","symptom_label":"bone pain"}],"raw_tool_response":{"status_code":200,"executed_query":"PREFIX owl: <http://www.w3.org/2002/07/owl#> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX doid: <http://purl.obolibrary.org/obo/DOID_> PREFIX ro: <http://purl.obolibrary.org/obo/RO_> PREFIX symp: <http://purl.obolibrary.org/obo/SYMP_0020023\" = SELECT ?symptom ?symptomLabel WHERE { ?symptom rdfs:label ?symptomLabel . FILTER(CONTAINS(LCASE(STR(?symptomLabel)), \"bone pain\"))}","result_row_count":1,"rows":[{"symptom":"http://purl.obolibrary.org/obo/SYMP_0020023","symptomLabel":"bone pain"}],"symp_candidates":[{"symp_uri":"http://purl.obolibrary.org/obo/SYMP_0020023","symp_label":"bone pain","parsed_symp_number":"0020023"}],"candidates":[{"symp_uri":"http://purl.obolibrary.org/obo/SYMP_0020023","symp_label":"bone pain","parsed_symp_number":"0020023"}],"disease_count":0,"disease_candidates":[],"disease_rows":[],"symptom_count":1,"symptom_candidates":["bone pain"],"symptom_rows":[{"symptom_uri":"http://purl.obolibrary.org/obo/SYMP_0020023","symptom_label":"bone pain"}],"symptoms":[{"symptom_uri":"http://purl.obolibrary.org/obo/SYMP_0020023","symptom_label":"bone pain"}]},"status":"found","notes":"Symptom label 'bone pain' found in SYMP ontology with URI SYMP_0020023."}]}"
+2026-03-24 12:52:06: task_name="map_symptoms_to_symp_task", task="You will receive a list of symptoms from the extract_symptoms_task output. You also receive ontology_support_pack from ontology_support_lookup_task. Process ALL symptoms in a single pass. For each symptom:
+Step 1 - Search query authoring: Build a read-only ontology lookup query that searches SYMP entities by symptom label text using case-insensitive matching. Ensure the query returns both term URI and label so you can choose the best candidate.
+Step 2 - Retrieve ontology results: Prefer matching entries from ontology_support_pack. If missing/insufficient for a symptom, call graphdb_ontology_query directly with a read-only label-search SPARQL query. Read candidate URIs, labels, and parsed IDs from tool output.
+Step 3 - Select best candidate by semantic label relevance. If no relevant candidate is found, mark symptom as unmapped.
+Step 4 - Retry: If no match found, retry up to 2 times using a synonym or simplified version of the symptom text. If still no match, mark unmapped.
+Step 5 - Use parsed_symp_number from the selected candidate. If missing, parse only digits after SYMP_ from the selected URI.
+Step 6 - Repeat for the next symptom until all are processed.
+ABSOLUTE RULES: - You MUST use tool-backed ontology evidence for every symptom. - matched_symp_uri and matched_symp_label MUST come from tool responses only. - NEVER invent, guess, or assume any SYMP URI, label, or numeric ID. - If tools return no results after all retries, set status "unmapped" and
+  set matched_symp_uri, matched_symp_label, parsed_symp_number all to null.
+- An unmapped result with null values is always correct over any fabrication.
+STRICT ontology access rules: - Call graphdb_ontology_query with a flat object:
+  {"sparql_query": "<full query string>"}
+- If tool fails, retry up to 2 times before unmapped.
+", agent="Clinical Workflow Orchestrator
+", status="started"
+2026-03-24 12:52:08: task_name="map_symptoms_to_symp_task", task="You will receive a list of symptoms from the extract_symptoms_task output. You also receive ontology_support_pack from ontology_support_lookup_task. Process ALL symptoms in a single pass. For each symptom:
+Step 1 - Search query authoring: Build a read-only ontology lookup query that searches SYMP entities by symptom label text using case-insensitive matching. Ensure the query returns both term URI and label so you can choose the best candidate.
+Step 2 - Retrieve ontology results: Prefer matching entries from ontology_support_pack. If missing/insufficient for a symptom, call graphdb_ontology_query directly with a read-only label-search SPARQL query. Read candidate URIs, labels, and parsed IDs from tool output.
+Step 3 - Select best candidate by semantic label relevance. If no relevant candidate is found, mark symptom as unmapped.
+Step 4 - Retry: If no match found, retry up to 2 times using a synonym or simplified version of the symptom text. If still no match, mark unmapped.
+Step 5 - Use parsed_symp_number from the selected candidate. If missing, parse only digits after SYMP_ from the selected URI.
+Step 6 - Repeat for the next symptom until all are processed.
+ABSOLUTE RULES: - You MUST use tool-backed ontology evidence for every symptom. - matched_symp_uri and matched_symp_label MUST come from tool responses only. - NEVER invent, guess, or assume any SYMP URI, label, or numeric ID. - If tools return no results after all retries, set status "unmapped" and
+  set matched_symp_uri, matched_symp_label, parsed_symp_number all to null.
+- An unmapped result with null values is always correct over any fabrication.
+STRICT ontology access rules: - Call graphdb_ontology_query with a flat object:
+  {"sparql_query": "<full query string>"}
+- If tool fails, retry up to 2 times before unmapped.
+", agent="Clinical Workflow Orchestrator
+", status="completed", output="{"symp_mappings":[{"symptom":"bone pain","matched_symp_uri":"http://purl.obolibrary.org/obo/SYMP_0020023","matched_symp_label":"bone pain","parsed_symp_number":"0020023","status":"mapped","notes":""}]}"
+2026-03-24 12:52:08: task_name="query_diseases_for_symptoms_task", task="You will receive the symp_mappings list from the map_symptoms_to_symp_task output.
+For each entry in symp_mappings, follow EXACTLY one of these two cases:
+CASE A - status is "unmapped" OR parsed_symp_number is null or empty:
+  Do NOT call any tool.
+  Record this entry with disease_candidates set to [] and status "skipped".
+
+CASE B - status is "mapped" AND parsed_symp_number is a non-empty digit string:
+  Build and execute the ontology relation query directly.
+  Use parsed_symp_number and relation RO:0002452.
+  Call graphdb_ontology_query with:
+  {"sparql_query": "<full query string>"}
+
+  Read the "disease_candidates"
+  array from tool result. Copy every string verbatim into
+  this entry's disease_candidates. Do not modify any string.
+
+  Also parse "disease_rows" from the same response. For each row,
+  copy disease URI and label exactly as returned into disease_entries.
+  Prefer row.disease_uri if present, otherwise row.disease_iri.
+
+ABSOLUTE RULES: - disease_candidates must contain ONLY strings from the tool response. - disease_entries must contain ONLY URI/label pairs from tool response rows. - NEVER invent, guess, infer, or paraphrase any disease name. - NEVER use symptom names as disease names. - NEVER copy disease names from examples, instructions, or memory. - If the tool returns an empty "disease_candidates" array, record []
+  and set status "no_diseases". This is a correct and valid result.
+- If tool call fails, retry up to 2 times with a repaired SPARQL query.
+  After 2 failures record [] and status "tool_failure". Never fabricate.
+- An empty disease_candidates list is always correct over any fabrication.
+Process ALL entries before returning. Do not stop early.
+", agent="Clinical Workflow Orchestrator
+", status="started"
+2026-03-24 12:52:15: task_name="query_diseases_for_symptoms_task", task="You will receive the symp_mappings list from the map_symptoms_to_symp_task output.
+For each entry in symp_mappings, follow EXACTLY one of these two cases:
+CASE A - status is "unmapped" OR parsed_symp_number is null or empty:
+  Do NOT call any tool.
+  Record this entry with disease_candidates set to [] and status "skipped".
+
+CASE B - status is "mapped" AND parsed_symp_number is a non-empty digit string:
+  Build and execute the ontology relation query directly.
+  Use parsed_symp_number and relation RO:0002452.
+  Call graphdb_ontology_query with:
+  {"sparql_query": "<full query string>"}
+
+  Read the "disease_candidates"
+  array from tool result. Copy every string verbatim into
+  this entry's disease_candidates. Do not modify any string.
+
+  Also parse "disease_rows" from the same response. For each row,
+  copy disease URI and label exactly as returned into disease_entries.
+  Prefer row.disease_uri if present, otherwise row.disease_iri.
+
+ABSOLUTE RULES: - disease_candidates must contain ONLY strings from the tool response. - disease_entries must contain ONLY URI/label pairs from tool response rows. - NEVER invent, guess, infer, or paraphrase any disease name. - NEVER use symptom names as disease names. - NEVER copy disease names from examples, instructions, or memory. - If the tool returns an empty "disease_candidates" array, record []
+  and set status "no_diseases". This is a correct and valid result.
+- If tool call fails, retry up to 2 times with a repaired SPARQL query.
+  After 2 failures record [] and status "tool_failure". Never fabricate.
+- An empty disease_candidates list is always correct over any fabrication.
+Process ALL entries before returning. Do not stop early.
+", agent="Clinical Workflow Orchestrator
+", status="completed", output="{"disease_results":[{"symptom":"bone pain","symp_uri":"http://purl.obolibrary.org/obo/SYMP_0020023","parsed_symp_number":"0020023","disease_candidates":["hypophosphatemia","dengue shock syndrome","dengue disease","asymptomatic dengue","dengue hemorrhagic fever"],"disease_entries":[{"disease_uri":"http://purl.obolibrary.org/obo/DOID_0050336","disease_label":"hypophosphatemia"},{"disease_uri":"http://purl.obolibrary.org/obo/DOID_0050125","disease_label":"dengue shock syndrome"},{"disease_uri":"http://purl.obolibrary.org/obo/DOID_12205","disease_label":"dengue disease"},{"disease_uri":"http://purl.obolibrary.org/obo/DOID_0050143","disease_label":"asymptomatic dengue"},{"disease_uri":"http://purl.obolibrary.org/obo/DOID_12206","disease_label":"dengue hemorrhagic fever"}],"status":"success","notes":""}]}"
+2026-03-24 12:52:15: task_name="rank_diagnoses_task", task="You will receive the disease_results list from the query_diseases_for_symptoms_task output.
+Step 1 - Build co-occurrence index: For each disease label in any disease_candidates list, count how many distinct symptoms it appears under. This is its co-occurrence score.
+Step 2 - Rank: Sort diseases highest to lowest score. Break ties alphabetically.
+Step 3 - Assign confidence tiers:
+  HIGH   — co_occurrence_score ≥ 60% of total_symptoms_processed
+  MEDIUM — co_occurrence_score 30–59% of total_symptoms_processed
+  LOW    — co_occurrence_score < 30% of total_symptoms_processed
+
+Step 4 - For each ranked disease, list the symptoms that support it.
+Step 5 - Return the differential diagnosis report.
+ABSOLUTE RULES: - Only include diseases that appear in disease_results disease_candidates lists. - NEVER add diseases from your own medical knowledge or memory. - NEVER invent or infer any disease not present in the input data. - If all disease_candidates lists are empty, return an empty
+  differential_diagnosis list and explain in notes. Do not fabricate.
+- An empty diagnosis is always correct over a fabricated one.
+If no disease appears under more than one symptom, return all with LOW confidence and note low specificity.
+", agent="Clinical Workflow Orchestrator
+", status="started"
+2026-03-24 12:52:18: task_name="rank_diagnoses_task", task="You will receive the disease_results list from the query_diseases_for_symptoms_task output.
+Step 1 - Build co-occurrence index: For each disease label in any disease_candidates list, count how many distinct symptoms it appears under. This is its co-occurrence score.
+Step 2 - Rank: Sort diseases highest to lowest score. Break ties alphabetically.
+Step 3 - Assign confidence tiers:
+  HIGH   — co_occurrence_score ≥ 60% of total_symptoms_processed
+  MEDIUM — co_occurrence_score 30–59% of total_symptoms_processed
+  LOW    — co_occurrence_score < 30% of total_symptoms_processed
+
+Step 4 - For each ranked disease, list the symptoms that support it.
+Step 5 - Return the differential diagnosis report.
+ABSOLUTE RULES: - Only include diseases that appear in disease_results disease_candidates lists. - NEVER add diseases from your own medical knowledge or memory. - NEVER invent or infer any disease not present in the input data. - If all disease_candidates lists are empty, return an empty
+  differential_diagnosis list and explain in notes. Do not fabricate.
+- An empty diagnosis is always correct over a fabricated one.
+If no disease appears under more than one symptom, return all with LOW confidence and note low specificity.
+", agent="Clinical Workflow Orchestrator
+", status="completed", output="{"differential_diagnosis":[{"rank":1,"disease":"asymptomatic dengue","co_occurrence_score":1,"confidence":"LOW","supporting_symptoms":["bone pain"]},{"rank":2,"disease":"dengue disease","co_occurrence_score":1,"confidence":"LOW","supporting_symptoms":["bone pain"]},{"rank":3,"disease":"dengue hemorrhagic fever","co_occurrence_score":1,"confidence":"LOW","supporting_symptoms":["bone pain"]},{"rank":4,"disease":"dengue shock syndrome","co_occurrence_score":1,"confidence":"LOW","supporting_symptoms":["bone pain"]},{"rank":5,"disease":"hypophosphatemia","co_occurrence_score":1,"confidence":"LOW","supporting_symptoms":["bone pain"]}],"total_symptoms_processed":1,"total_diseases_found":5,"unmapped_symptoms":[],"notes":"All diseases appear under only one symptom; confidence is LOW due to low specificity."}"
+2026-03-24 12:52:18: task_name="clarify_followup_symptoms_task", task="You will receive disease_results and differential_diagnosis from prior tasks.
+── TRIGGER RULE ────────────────────────────────────────────────────────── If total_diseases_found <= 1:
+  Set followup_needed = false. Return empty disease_symptom_profiles and
+  questions_asked arrays immediately. Do not call any tools.
+If total_diseases_found > 1:
+  Follow-up is MANDATORY. Continue with the steps below.
+──────────────────────────────────────────────────────────────────────────
+Step 1 - Select candidate diseases for profiling.
+  Take all diseases with HIGH or MEDIUM confidence from differential_diagnosis.
+  Also include any LOW-confidence diseases whose co_occurrence_score equals
+  the highest co_occurrence_score present (ties at the top).
+  Cap the candidate set at 5 diseases.
+
+Step 2 - Fetch symptom profiles.
+  For each candidate disease, locate its disease_uri in disease_entries
+  (from disease_results). If no URI is available, mark it skipped_for_followup.
+  For every disease with a URI, build a read-only ontology relation query
+  that uses the disease URI to retrieve linked symptom entities and symptom
+  labels via disease-to-symptom restrictions. Execute it using
+  graphdb_ontology_query with {"sparql_query": "<full query string>"}.
+  Collect the returned symptom labels into that disease's candidate_symptoms list.
+  Do not fabricate symptom labels. Use tool output only.
+
+Step 3 - Build a global discriminative symptom pool.
+  Collect every symptom label across all profiled diseases into one pool.
+  Then apply these filters IN ORDER:
+    a) Remove symptoms already present in the initial patient message
+       (case-insensitive match against the original extracted symptom names).
+    b) Remove symptoms that appear in ALL candidate disease profiles
+       (they cannot discriminate between diseases).
+    c) Score each remaining symptom by discriminative power:
+         score = (number of candidate diseases that do NOT list this symptom)
+         Higher score = more exclusive to fewer diseases = more discriminative.
+    d) Break ties by preferring symptoms linked to higher-ranked diseases
+       (lower rank number = higher priority).
+
+Step 4 - Select questions.
+  Select an adaptive number of symptoms from highest discriminative score,
+  asking as few questions as possible while still separating top diagnoses.
+  Maximum allowed patient questions: 22.
+  Before creating patient questions, classify each selected symptom as either:
+  - patient_reportable (can be answered directly by the patient), or
+  - investigation_required (needs vitals/labs/imaging/clinical measurement).
+
+  Investigation-required examples:
+  hypotension, hypertension, thrombocytopenia, low platelet count,
+  leukopenia, anemia, elevated CRP, elevated liver enzymes, oxygen saturation,
+  ECG/EKG findings, CT/MRI/X-ray findings, bradycardia, tachycardia,
+  low heart rate, high heart rate, and blood-test-only abnormalities.
+
+  For investigation_required items:
+  - Do NOT create a patient yes/no question.
+  - Add them to an `investigations_required` list with a short reason.
+
+  For patient_reportable items only, create yes/no questions.
+  For each selected symptom, emit exactly one yes/no question using this
+  conditional style:
+  - If the symptom is a common everyday term (e.g., fever, cough, headache),
+    ask directly: "Do you have <symptom>?"
+  - Treat these as common everyday terms and ask directly with no
+    parentheses: fever, cough, headache, bleeding, vomiting, diarrhea,
+    chest pain, sore throat, muscle pain, joint pain.
+  - If the symptom is a medical/technical term (e.g., rash, dysuria,
+    dyspnea), ask with a plain explanation plus the term in parentheses:
+    "Do you have <simple explanation> (<medical term>)?"
+    Example: "Do you have red spots on the skin (rash)?"
+  
+  If needed for grammar, a close equivalent is allowed, but it MUST remain
+  a single yes/no question about exactly one symptom.
+  Keep each question short (max 14 words), patient-friendly, and avoid
+  medical jargon unless it is part of the symptom label.
+  Do not ask severity, duration, or cause in the same question.
+  IMPORTANT language policy:
+  - Use easy, non-technical wording so any patient can understand.
+  - Include parentheses only when the symptom label is medical/technical.
+  - Common everyday symptom names should NOT be rewritten with parentheses.
+  - Example common: "Do you have fever?"
+  - Example common: "Do you have bleeding?"
+  - Example medical: "Do you have yellow skin or eyes (jaundice)?"
+  - The wording before parentheses MUST explain the symptom in plain words,
+    not repeat the same medical label.
+  - FORBIDDEN example: "Do you have rash (rash)?"
+  - FORBIDDEN example: "Do you have bleeding (bleeding)?"
+  - CORRECT example: "Do you have red or itchy skin spots (rash)?"
+  Global deduplication: never emit the same symptom question twice.
+  Skip any symptom that already has a non-empty patient_answer in the
+  input context.
+
+ABSOLUTE RULES: - Call graphdb_ontology_query ONLY with SPARQL queries built from URIs in disease_entries. - Never invent disease URIs, symptom URIs, or symptom labels. - Never ask about a symptom the patient already confirmed. - Never ask the patient about findings that require tests or measurements. - Any body parameter requiring measurement (heart rate, blood pressure,
+  oxygen saturation, lab values, ECG/EKG, imaging) MUST be investigation_required.
+- Put test/measurement findings only in `investigations_required`. - Never produce or suggest a final diagnosis in this step. - questions_asked must contain no duplicate symptom entries. - Each question must end with "?" and be answerable by yes/no only. - Each question must reference exactly one symptom from candidate_symptoms. - For medical/technical symptoms, include the medical term in parentheses. - For common symptoms, do not add parentheses unless needed for clarity. - Never output "<term> (<term>)" for any symptom.
+", agent="Clinical Workflow Orchestrator
+", status="started"
+2026-03-24 12:52:33: task_name="clarify_followup_symptoms_task", task="You will receive disease_results and differential_diagnosis from prior tasks.
+── TRIGGER RULE ────────────────────────────────────────────────────────── If total_diseases_found <= 1:
+  Set followup_needed = false. Return empty disease_symptom_profiles and
+  questions_asked arrays immediately. Do not call any tools.
+If total_diseases_found > 1:
+  Follow-up is MANDATORY. Continue with the steps below.
+──────────────────────────────────────────────────────────────────────────
+Step 1 - Select candidate diseases for profiling.
+  Take all diseases with HIGH or MEDIUM confidence from differential_diagnosis.
+  Also include any LOW-confidence diseases whose co_occurrence_score equals
+  the highest co_occurrence_score present (ties at the top).
+  Cap the candidate set at 5 diseases.
+
+Step 2 - Fetch symptom profiles.
+  For each candidate disease, locate its disease_uri in disease_entries
+  (from disease_results). If no URI is available, mark it skipped_for_followup.
+  For every disease with a URI, build a read-only ontology relation query
+  that uses the disease URI to retrieve linked symptom entities and symptom
+  labels via disease-to-symptom restrictions. Execute it using
+  graphdb_ontology_query with {"sparql_query": "<full query string>"}.
+  Collect the returned symptom labels into that disease's candidate_symptoms list.
+  Do not fabricate symptom labels. Use tool output only.
+
+Step 3 - Build a global discriminative symptom pool.
+  Collect every symptom label across all profiled diseases into one pool.
+  Then apply these filters IN ORDER:
+    a) Remove symptoms already present in the initial patient message
+       (case-insensitive match against the original extracted symptom names).
+    b) Remove symptoms that appear in ALL candidate disease profiles
+       (they cannot discriminate between diseases).
+    c) Score each remaining symptom by discriminative power:
+         score = (number of candidate diseases that do NOT list this symptom)
+         Higher score = more exclusive to fewer diseases = more discriminative.
+    d) Break ties by preferring symptoms linked to higher-ranked diseases
+       (lower rank number = higher priority).
+
+Step 4 - Select questions.
+  Select an adaptive number of symptoms from highest discriminative score,
+  asking as few questions as possible while still separating top diagnoses.
+  Maximum allowed patient questions: 22.
+  Before creating patient questions, classify each selected symptom as either:
+  - patient_reportable (can be answered directly by the patient), or
+  - investigation_required (needs vitals/labs/imaging/clinical measurement).
+
+  Investigation-required examples:
+  hypotension, hypertension, thrombocytopenia, low platelet count,
+  leukopenia, anemia, elevated CRP, elevated liver enzymes, oxygen saturation,
+  ECG/EKG findings, CT/MRI/X-ray findings, bradycardia, tachycardia,
+  low heart rate, high heart rate, and blood-test-only abnormalities.
+
+  For investigation_required items:
+  - Do NOT create a patient yes/no question.
+  - Add them to an `investigations_required` list with a short reason.
+
+  For patient_reportable items only, create yes/no questions.
+  For each selected symptom, emit exactly one yes/no question using this
+  conditional style:
+  - If the symptom is a common everyday term (e.g., fever, cough, headache),
+    ask directly: "Do you have <symptom>?"
+  - Treat these as common everyday terms and ask directly with no
+    parentheses: fever, cough, headache, bleeding, vomiting, diarrhea,
+    chest pain, sore throat, muscle pain, joint pain.
+  - If the symptom is a medical/technical term (e.g., rash, dysuria,
+    dyspnea), ask with a plain explanation plus the term in parentheses:
+    "Do you have <simple explanation> (<medical term>)?"
+    Example: "Do you have red spots on the skin (rash)?"
+  
+  If needed for grammar, a close equivalent is allowed, but it MUST remain
+  a single yes/no question about exactly one symptom.
+  Keep each question short (max 14 words), patient-friendly, and avoid
+  medical jargon unless it is part of the symptom label.
+  Do not ask severity, duration, or cause in the same question.
+  IMPORTANT language policy:
+  - Use easy, non-technical wording so any patient can understand.
+  - Include parentheses only when the symptom label is medical/technical.
+  - Common everyday symptom names should NOT be rewritten with parentheses.
+  - Example common: "Do you have fever?"
+  - Example common: "Do you have bleeding?"
+  - Example medical: "Do you have yellow skin or eyes (jaundice)?"
+  - The wording before parentheses MUST explain the symptom in plain words,
+    not repeat the same medical label.
+  - FORBIDDEN example: "Do you have rash (rash)?"
+  - FORBIDDEN example: "Do you have bleeding (bleeding)?"
+  - CORRECT example: "Do you have red or itchy skin spots (rash)?"
+  Global deduplication: never emit the same symptom question twice.
+  Skip any symptom that already has a non-empty patient_answer in the
+  input context.
+
+ABSOLUTE RULES: - Call graphdb_ontology_query ONLY with SPARQL queries built from URIs in disease_entries. - Never invent disease URIs, symptom URIs, or symptom labels. - Never ask about a symptom the patient already confirmed. - Never ask the patient about findings that require tests or measurements. - Any body parameter requiring measurement (heart rate, blood pressure,
+  oxygen saturation, lab values, ECG/EKG, imaging) MUST be investigation_required.
+- Put test/measurement findings only in `investigations_required`. - Never produce or suggest a final diagnosis in this step. - questions_asked must contain no duplicate symptom entries. - Each question must end with "?" and be answerable by yes/no only. - Each question must reference exactly one symptom from candidate_symptoms. - For medical/technical symptoms, include the medical term in parentheses. - For common symptoms, do not add parentheses unless needed for clarity. - Never output "<term> (<term>)" for any symptom.
+", agent="Clinical Workflow Orchestrator
+", status="completed", output="{"followup_needed":true,"disease_symptom_profiles":[{"disease":"asymptomatic dengue","disease_uri":"http://purl.obolibrary.org/obo/DOID_0050143","candidate_symptoms":["bleeding","joint pain","severe headache","rash","fever","muscle pain","bone pain"],"status":"profiled"},{"disease":"dengue disease","disease_uri":"http://purl.obolibrary.org/obo/DOID_12205","candidate_symptoms":[],"status":"skipped_for_followup"},{"disease":"dengue hemorrhagic fever","disease_uri":"http://purl.obolibrary.org/obo/DOID_12206","candidate_symptoms":[],"status":"skipped_for_followup"},{"disease":"dengue shock syndrome","disease_uri":"http://purl.obolibrary.org/obo/DOID_0050125","candidate_symptoms":[],"status":"skipped_for_followup"},{"disease":"hypophosphatemia","disease_uri":"http://purl.obolibrary.org/obo/DOID_0050336","candidate_symptoms":[],"status":"skipped_for_followup"}],"questions_asked":[{"symptom":"bleeding","question":"Do you have bleeding?","patient_answer":null},{"symptom":"joint pain","question":"Do you have joint pain?","patient_answer":null},{"symptom":"severe headache","question":"Do you have severe headache?","patient_answer":null},{"symptom":"rash","question":"Do you have red or itchy skin spots (rash)?","patient_answer":null},{"symptom":"fever","question":"Do you have fever?","patient_answer":null},{"symptom":"muscle pain","question":"Do you have muscle pain?","patient_answer":null}],"investigations_required":[],"notes":"Profiled 1 disease with 7 candidate symptoms; skipped 4 diseases; selected 6 discriminative questions."}"

@@ -16,22 +16,25 @@ extract_symptoms_task:
 map_symptoms_to_symp_task:
   description: >
     You will receive a list of symptoms from the extract_symptoms_task output.
+
+    CRITICAL TOOL CONTRACT:
+    graphdb_ontology_query only executes the exact sparql_query you send.
+    It does not determine intent or compose query logic for you.
+    You must decide what to query and build the query.
+    Use the graphdb_ontology_query tool description as the source of
+    query-construction guidance.
+
     Process ALL symptoms in a single pass. For each symptom:
 
     Step 1 - Search query authoring:
-    Build a read-only SPARQL SELECT query yourself to search SYMP labels by the symptom text.
-    Use this query shape (you may format whitespace freely):
-      PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-      SELECT ?symptom ?symptomLabel
-      WHERE {
-        ?symptom rdfs:label ?symptomLabel .
-        FILTER(CONTAINS(LCASE(STR(?symptomLabel)), "<lowercased symptom text>"))
-      }
+    Build a read-only ontology lookup query that searches SYMP entities by
+    symptom label text using case-insensitive matching. Ensure the query
+    returns both term URI and label so you can choose the best candidate.
 
-    Step 2 - Execute:
-    Call graphdb_symp_search with:
-      {"sparql_query": "<full query string>"}
-    Read candidate URIs, labels, and parsed IDs from the tool response.
+    Step 2 - Retrieve ontology results:
+    Call graphdb_ontology_query directly with a read-only label-search SPARQL
+    query for each symptom.
+    Read candidate URIs, labels, and parsed IDs from tool output.
 
     Step 3 - Select best candidate by semantic label relevance.
     If no relevant candidate is found, mark symptom as unmapped.
@@ -45,23 +48,23 @@ map_symptoms_to_symp_task:
     Step 6 - Repeat for the next symptom until all are processed.
 
     ABSOLUTE RULES:
-    - You MUST call graphdb_symp_search for every symptom. Never skip tool calls.
+    - You MUST use tool-backed ontology evidence for every symptom.
     - matched_symp_uri and matched_symp_label MUST come from tool responses only.
     - NEVER invent, guess, or assume any SYMP URI, label, or numeric ID.
     - If tools return no results after all retries, set status "unmapped" and
       set matched_symp_uri, matched_symp_label, parsed_symp_number all to null.
     - An unmapped result with null values is always correct over any fabrication.
 
-    STRICT graphdb_symp_search call rules:
-    - Action input must be exactly one flat object: {"sparql_query": "<full query string>"}
-    - Do not include extra keys.
-    - If a call fails, retry up to 2 times after fixing your SPARQL query.
+    STRICT ontology access rules:
+    - Call graphdb_ontology_query with a flat object:
+      {"sparql_query": "<full query string>"}
+    - If tool fails, retry up to 2 times before unmapped.
   expected_output: >
     A JSON object with key "symp_mappings" containing a list of objects.
     Each object must have these keys:
       "symptom": the symptom name string from the input
-      "matched_symp_uri": the full URI string returned by graphdb_symp_search, or null if unmapped
-      "matched_symp_label": the label string returned by graphdb_symp_search, or null if unmapped
+      "matched_symp_uri": the full URI string returned by graphdb_ontology_query, or null if unmapped
+      "matched_symp_label": the label string returned by graphdb_ontology_query, or null if unmapped
       "parsed_symp_number": the digits-only string extracted from the URI, or null if unmapped
       "status": either "mapped" or "unmapped"
       "notes": empty string on success, brief failure reason on unmapped
@@ -75,6 +78,12 @@ query_diseases_for_symptoms_task:
   description: >
     You will receive the symp_mappings list from the map_symptoms_to_symp_task output.
 
+    CRITICAL TOOL CONTRACT:
+    graphdb_ontology_query only runs the exact sparql_query payload you provide.
+    It does not infer intent, fill missing parts, or generate a query for you.
+    You must decide query intent and author the query.
+    Use the graphdb_ontology_query tool description for query-construction rules.
+
     For each entry in symp_mappings, follow EXACTLY one of these two cases:
 
     CASE A - status is "unmapped" OR parsed_symp_number is null or empty:
@@ -82,35 +91,16 @@ query_diseases_for_symptoms_task:
       Record this entry with disease_candidates set to [] and status "skipped".
 
     CASE B - status is "mapped" AND parsed_symp_number is a non-empty digit string:
-      You MUST construct a read-only SPARQL SELECT query yourself.
-      Use the parsed_symp_number from the mapping as the SYMP term in the query.
+      Build and execute the ontology relation query directly.
+      Use Disease-to-symptom restriction traversal with parsed_symp_number.
+      Call graphdb_ontology_query with:
+      {"sparql_query": "<full query string>"}
 
-      Required query shape (you may format whitespace freely):
-      PREFIX owl: <http://www.w3.org/2002/07/owl#>
-      PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-      PREFIX ro: <http://purl.obolibrary.org/obo/RO_>
-      PREFIX symp: <http://purl.obolibrary.org/obo/SYMP_>
-      SELECT ?disease ?diseaseLabel
-      WHERE {
-        ?disease rdfs:subClassOf ?restriction .
-        ?restriction owl:onProperty ro:0002452 .
-        ?restriction owl:someValuesFrom symp:<parsed_symp_number> .
-        ?disease rdfs:label ?diseaseLabel .
-        FILTER(LANG(?diseaseLabel) = "en")
-      }
-
-      Then call graphdb_sparql_query.
-      The tool takes ONE argument named exactly "sparql_query".
-      The value must be your full SPARQL query string.
-      The Action Input must be a flat JSON object with exactly one key:
-        {"sparql_query": "<full query string>"}
-      Do NOT wrap in an array. Do NOT add other keys. One flat object only.
-
-      The tool returns a JSON string. Parse it and read the "disease_candidates"
-      array from the result. Copy every string from that array verbatim into
+      Read the "disease_candidates"
+      array from tool result. Copy every string verbatim into
       this entry's disease_candidates. Do not modify any string.
 
-      Also parse "disease_rows" from the same tool response. For each row,
+      Also parse "disease_rows" from the same response. For each row,
       copy disease URI and label exactly as returned into disease_entries.
       Prefer row.disease_uri if present, otherwise row.disease_iri.
 
@@ -122,7 +112,7 @@ query_diseases_for_symptoms_task:
     - NEVER copy disease names from examples, instructions, or memory.
     - If the tool returns an empty "disease_candidates" array, record []
       and set status "no_diseases". This is a correct and valid result.
-    - If the tool call fails, retry up to 2 times after fixing your SPARQL query.
+    - If tool call fails, retry up to 2 times with a repaired SPARQL query.
       After 2 failures record [] and status "tool_failure". Never fabricate.
     - An empty disease_candidates list is always correct over any fabrication.
 
@@ -133,7 +123,7 @@ query_diseases_for_symptoms_task:
       "symptom": the symptom name string from the mapping
       "symp_uri": the matched_symp_uri from the mapping, or null if skipped
       "parsed_symp_number": the parsed_symp_number from the mapping, or null if skipped
-      "disease_candidates": list of disease label strings from graphdb_sparql_query,
+      "disease_candidates": list of disease label strings from graphdb_ontology_query,
                             or empty list [] if no diseases found, tool failed, or skipped
       "disease_entries": list of objects with keys:
              "disease_uri": full disease URI string from tool response, or null
@@ -142,7 +132,7 @@ query_diseases_for_symptoms_task:
       "notes": empty string on success, brief description of outcome otherwise
 
     CRITICAL: every string in disease_candidates must be copied verbatim from
-    the "disease_candidates" array in the graphdb_sparql_query response.
+    the graphdb_ontology_query "disease_candidates" response field.
     Do not write any disease name from memory, examples, or inference.
     Every disease_entries object must be copied from response rows only.
   agent: disease_mapper
@@ -199,6 +189,12 @@ clarify_followup_symptoms_task:
   description: >
     You will receive disease_results and differential_diagnosis from prior tasks.
 
+    CRITICAL TOOL CONTRACT:
+    graphdb_ontology_query is only an execution layer.
+    It executes the exact sparql_query string you send and nothing else.
+    You must decide what data is needed and author the query accordingly.
+    Use the graphdb_ontology_query tool description to construct valid queries.
+
     ── TRIGGER RULE ──────────────────────────────────────────────────────────
     If total_diseases_found <= 1:
       Set followup_needed = false. Return empty disease_symptom_profiles and
@@ -216,10 +212,13 @@ clarify_followup_symptoms_task:
     Step 2 - Fetch symptom profiles.
       For each candidate disease, locate its disease_uri in disease_entries
       (from disease_results). If no URI is available, mark it skipped_for_followup.
-      For every disease with a URI, call graphdb_disease_symptoms with:
-        {"disease_uri": "<full URI>"}
-      Collect the returned symptom labels into that disease's candidate_symptoms list.
-      Do not fabricate symptom labels. Use tool output only.
+      For every disease with a URI:
+      a) Copy PATTERN 2 (disease-to-symptom) from graphdb_ontology_query tool description.
+      b) Replace <disease_uri> with the actual disease URI.
+      c) Execute it using graphdb_ontology_query with {"sparql_query": "<full query string>"}.
+      d) Do NOT add FILTER(LANG(...)) or any other filters to the pattern.
+      e) Collect the returned symptom labels into that disease's candidate_symptoms list.
+      f) Use tool output only; never fabricate symptom labels.
 
     Step 3 - Build a global discriminative symptom pool.
       Collect every symptom label across all profiled diseases into one pool.
@@ -238,22 +237,51 @@ clarify_followup_symptoms_task:
       Select an adaptive number of symptoms from highest discriminative score,
       asking as few questions as possible while still separating top diagnoses.
       Maximum allowed patient questions: 22.
-      Before creating patient questions, classify each selected symptom as either:
-      - patient_reportable (can be answered directly by the patient), or
-      - investigation_required (needs vitals/labs/imaging/clinical measurement).
 
-      Investigation-required examples:
-      hypotension, hypertension, thrombocytopenia, low platelet count,
-      leukopenia, anemia, elevated CRP, elevated liver enzymes, oxygen saturation,
-      ECG/EKG findings, CT/MRI/X-ray findings, bradycardia, tachycardia,
-      low heart rate, high heart rate, and blood-test-only abnormalities.
+      ★★★ MANDATORY CLASSIFICATION BEFORE ASKING ★★★
+      STEP A: Classify each selected symptom.
+      Apply REASONING (not hardcoded lists) to classify each selected symptom as EITHER:
+      - investigation_required, OR
+      - patient_reportable
 
-      For investigation_required items:
-      - Do NOT create a patient yes/no question.
-      - Add them to an `investigations_required` list with a short reason.
+      INVESTIGATION_REQUIRED classification rule:
+      Apply these checks IN ORDER. If ANY apply, classify as investigation_required:
+      1. Does it require specialized equipment to detect? (BP cuff, oximeter, ECG, lab machine, imaging)
+      2. Is it a measurement/lab value? (e.g., "120/80 mmHg", "glucose 95 mg/dL", "WBC 5K")
+      3. Is it a biomarker or lab finding? (enzymes, counts, levels, CRP, liver function tests)
+      4. Is it an imaging/radiology result? (X-ray/CT/MRI/ultrasound findings)
+      5. Does it require professional clinical assessment? (heart murmurs detected by stethoscope,
+         retinal findings, some skin signs requiring magnification)
+      6. Does the symptom name contain measurement keywords? (pressure, saturation, heart rate,
+         count, enzyme, level, finding, imaging, ECG, EKG, result, test)
 
-      For patient_reportable items only, create yes/no questions.
-      For each selected symptom, emit exactly one yes/no question using this
+      PATIENT_REPORTABLE classification rule:
+      Apply these checks. If ANY apply, classify as patient_reportable:
+      1. Patient directly feels/experiences it? (fever/feeling hot, cough/coughing, pain/hurt,
+         nausea/feeling sick, dizziness/feeling faint, fatigue/tiredness)
+      2. Patient can directly observe it? (bleeding they see, rash/spots they see, swelling they feel)
+      3. Patient can describe it without equipment? (Yes = patient_reportable)
+      4. It's a subjective symptom or patient-observable sign? (Yes = patient_reportable)
+
+      ★★★ MANDATORY SEPARATION STEP ★★★
+      STEP B: Create TWO SEPARATE LISTS after classification:
+      List_A = all symptoms classified as investigation_required
+      List_B = all symptoms classified as patient_reportable
+
+      THEN:
+      - Add ALL items from List_A to investigations_required with a reason
+      - Use ONLY List_B to generate patient questions
+      - NEVER generate a question for anything in List_A
+
+      ★★★ MANDATORY FILTERING RULE ★★★
+      - investigation_required items DO NOT become patient questions.
+      - investigation_required items MUST be added to investigations_required list with a brief reason.
+      - Only patient_reportable items may become yes/no questions.
+      - If a symptom appears in questions_asked, it MUST be verified as in List_B (patient_reportable).
+      - AUDIT: No symptom should appear in BOTH questions_asked AND investigations_required.
+
+      For patient_reportable items ONLY (from List_B), create yes/no questions:
+      For each selected symptom in List_B, emit exactly one yes/no question using this
       conditional style:
       - If the symptom is a common everyday term (e.g., fever, cough, headache),
         ask directly: "Do you have <symptom>?"
@@ -287,27 +315,35 @@ clarify_followup_symptoms_task:
       input context.
 
     ABSOLUTE RULES:
-    - Call graphdb_disease_symptoms ONLY with URIs from disease_entries.
+    - Call graphdb_ontology_query ONLY with SPARQL queries built from URIs in disease_entries.
     - Never invent disease URIs, symptom URIs, or symptom labels.
     - Never ask about a symptom the patient already confirmed.
-    - Never ask the patient about findings that require tests or measurements.
-    - Any body parameter requiring measurement (heart rate, blood pressure,
-      oxygen saturation, lab values, ECG/EKG, imaging) MUST be investigation_required.
-    - Put test/measurement findings only in `investigations_required`.
+    ★★★ CRITICAL: Copy SPARQL patterns EXACTLY from graphdb_ontology_query tool description.
+    ★★★ CRITICAL: Do NOT add FILTER(LANG(...)) or any filters NOT shown in the patterns.
+    ★★★ CRITICAL: Deviating from patterns = zero results = failed queries. Follow patterns exactly.
+    ★★★ CRITICAL: Use reasoning—not hardcoded lists—to classify each symptom as investigation_required or patient_reportable.
+    ★★★ CRITICAL: Create TWO SEPARATE LISTS after classification (investigation_required and patient_reportable).
+    ★★★ CRITICAL: investigation_required symptoms MUST NOT appear in questions_asked under ANY circumstance.
+    ★★★ CRITICAL: Do NOT ask about hypotension, shock, thrombocytopenia, or ANY investigation_required finding.
+    ★★★ CRITICAL: AUDIT your output: if any symptom appears in BOTH questions_asked and investigations_required, the output is WRONG.
+    - Any symptom requiring equipment/measurement/labs/imaging to detect MUST be investigation_required.
+    - Any symptom the patient can directly experience or observe without equipment is patient_reportable.
+    - If uncertain about a symptom's nature, apply the classification rules above; do not guess.
     - Never produce or suggest a final diagnosis in this step.
     - questions_asked must contain no duplicate symptom entries.
-    - Each question must end with "?" and be answerable by yes/no only.
+    - Each question in questions_asked must end with "?" and be answerable by yes/no only.
     - Each question must reference exactly one symptom from candidate_symptoms.
     - For medical/technical symptoms, include the medical term in parentheses.
     - For common symptoms, do not add parentheses unless needed for clarity.
     - Never output "<term> (<term>)" for any symptom.
+    - Every symptom in questions_asked must be verified as patient_reportable (not investigation_required).
   expected_output: >
     A JSON object with keys:
       "followup_needed": boolean — true only when total_diseases_found > 1
       "disease_symptom_profiles": list of objects, one per candidate disease:
         "disease": disease label string (copied from differential_diagnosis)
         "disease_uri": disease URI string from disease_entries, or null
-        "candidate_symptoms": list of symptom label strings from graphdb_disease_symptoms tool
+        "candidate_symptoms": list of symptom label strings from graphdb_ontology_query tool
         "status": one of "profiled" | "skipped_for_followup" | "tool_failure"
       "questions_asked": list of question objects, max 22:
         "symptom": the symptom label string used to generate the question

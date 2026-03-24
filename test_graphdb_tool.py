@@ -12,12 +12,12 @@ SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from hospitalmas.tools.graphdb_sparql_query_tool import GraphDbSparqlQueryTool
+from hospitalmas.tools.graphdb_ontology_query_tool import GraphDbOntologyQueryTool
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run GraphDbSparqlQueryTool directly for manual testing.",
+        description="Run GraphDbOntologyQueryTool directly for manual testing.",
     )
     parser.add_argument(
         "labels",
@@ -36,12 +36,26 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    tool = GraphDbSparqlQueryTool(timeout_seconds=args.timeout)
+    tool = GraphDbOntologyQueryTool(timeout_seconds=args.timeout)
 
     for label in args.labels:
         print("=" * 80)
         print(f"Testing SYMP label: {label}")
-        result = tool._run(label)
+        query = f"""
+    PREFIX owl: <http://www.w3.org/2002/07/owl#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX ro: <http://purl.obolibrary.org/obo/RO_>
+    PREFIX symp: <http://purl.obolibrary.org/obo/SYMP_>
+    SELECT ?disease ?diseaseLabel
+    WHERE {{
+      ?disease rdfs:subClassOf ?restriction .
+      ?restriction owl:onProperty ro:0002452 .
+      ?restriction owl:someValuesFrom symp:{label} .
+      ?disease rdfs:label ?diseaseLabel .
+      FILTER(LANG(?diseaseLabel) = "en")
+    }}
+    """.strip()
+        result = tool._run(query)
         print(result)
 
     return 0

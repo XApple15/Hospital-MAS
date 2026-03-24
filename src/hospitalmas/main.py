@@ -3,12 +3,14 @@ import sys
 import warnings
 import json
 import re
+import io
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from hospitalmas.crew import Hospitalmas
-from hospitalmas.tools.graphdb_symp_search_tool import GraphDbSympSearchTool
-from hospitalmas.tools.graphdb_sparql_query_tool import GraphDbSparqlQueryTool
-from hospitalmas.tools.graphdb_disease_symptoms_tool import GraphDbDiseaseSymptomsTool
+from hospitalmas.tools.graphdb_ontology_query_tool import GraphDbOntologyQueryTool
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
@@ -74,10 +76,52 @@ def _run_phase1(user_message: str) -> tuple[Any, dict[str, Any], dict[str, Any]]
 
 def _build_runtime_tools() -> list:
     return [
-        GraphDbSympSearchTool(),
-        GraphDbSparqlQueryTool(),
-        GraphDbDiseaseSymptomsTool(),
+        GraphDbOntologyQueryTool(),
     ]
+
+
+def _build_runtime_log_file() -> str:
+    """Create a timestamped log file path in logs/ for the current run."""
+    logs_dir = Path(__file__).resolve().parents[2] / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return str(logs_dir / f"flow_{ts}.txt")
+
+
+class _TeeStream(io.TextIOBase):
+    """Mirror writes to multiple streams (terminal + log file)."""
+
+    def __init__(self, *streams: io.TextIOBase):
+        self._streams = streams
+
+    def write(self, s: str) -> int:
+        for stream in self._streams:
+            stream.write(s)
+        return len(s)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+    def isatty(self) -> bool:
+        return any(getattr(stream, "isatty", lambda: False)() for stream in self._streams)
+
+
+@contextmanager
+def _tee_terminal_to_log(log_file_path: str):
+    """Duplicate terminal stdout/stderr to a run-specific log file."""
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    with open(log_file_path, "a", encoding="utf-8") as log_handle:
+        sys.stdout = _TeeStream(original_stdout, log_handle)
+        sys.stderr = _TeeStream(original_stderr, log_handle)
+        try:
+            yield
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
 
 
 # ── JSON extraction helpers ───────────────────────────────────────────────────
@@ -234,36 +278,39 @@ def run():
     if not user_message:
         user_message = "I have bone pain."
 
-    # ── Phase 1: diagnostic pipeline → question generation ────────────────
-    print("\n[Phase 1] Running diagnostic pipeline...\n")
-    phase1_result, ranking_payload, followup_payload = _run_phase1(user_message)
+    Hospitalmas.runtime_log_file = _build_runtime_log_file()
+    print(f"[Logging] Full terminal output will be saved to: {Hospitalmas.runtime_log_file}")
+    with _tee_terminal_to_log(Hospitalmas.runtime_log_file):
+        # ── Phase 1: diagnostic pipeline → question generation ────────────
+        print("\n[Phase 1] Running diagnostic pipeline...\n")
+        phase1_result, ranking_payload, followup_payload = _run_phase1(user_message)
 
-    if not ranking_payload:
-        print("\n[Warning] No ranking payload found in Phase 1 output.")
-        print(getattr(phase1_result, "raw", str(phase1_result)))
-        return
+        if not ranking_payload:
+            print("\n[Warning] No ranking payload found in Phase 1 output.")
+            print(getattr(phase1_result, "raw", str(phase1_result)))
+            return
 
-    # If only 0–1 diseases found, skip follow-up entirely
-    total_diseases = ranking_payload.get("total_diseases_found", 0)
-    if total_diseases <= 1:
-        print("\n── Initial diagnosis (no follow-up needed) ──────────────────")
-        print(json.dumps(ranking_payload, indent=2, ensure_ascii=True))
-        return
+        # If only 0–1 diseases found, skip follow-up entirely
+        total_diseases = ranking_payload.get("total_diseases_found", 0)
+        if total_diseases <= 1:
+            print("\n── Initial diagnosis (no follow-up needed) ──────────────────")
+            print(json.dumps(ranking_payload, indent=2, ensure_ascii=True))
+            return
 
-    if not followup_payload:
-        print("\n[Warning] Ranking found but no follow-up payload. Showing initial ranking.")
-        print(json.dumps(ranking_payload, indent=2, ensure_ascii=True))
-        return
+        if not followup_payload:
+            print("\n[Warning] Ranking found but no follow-up payload. Showing initial ranking.")
+            print(json.dumps(ranking_payload, indent=2, ensure_ascii=True))
+            return
 
-    # ── Human-in-the-loop: collect patient answers ─────────────────────────
-    followup_with_answers = _collect_answers(followup_payload)
+        # ── Human-in-the-loop: collect patient answers ─────────────────────
+        followup_with_answers = _collect_answers(followup_payload)
 
-    # ── Phase 2: refine diagnosis with answers ─────────────────────────────
-    print("\n[Phase 2] Refining diagnosis...\n")
-    refined = _run_refine_phase(ranking_payload, followup_with_answers)
+        # ── Phase 2: refine diagnosis with answers ─────────────────────────
+        print("\n[Phase 2] Refining diagnosis...\n")
+        refined = _run_refine_phase(ranking_payload, followup_with_answers)
 
-    print("\n── Refined diagnosis ─────────────────────────────────────────")
-    print(json.dumps(refined, indent=2, ensure_ascii=True))
+        print("\n── Refined diagnosis ─────────────────────────────────────────")
+        print(json.dumps(refined, indent=2, ensure_ascii=True))
 
 
 def train():
@@ -274,6 +321,7 @@ def train():
         )
     }
     try:
+        Hospitalmas.runtime_log_file = _build_runtime_log_file()
         Hospitalmas.runtime_tools = _build_runtime_tools()
         Hospitalmas().crew().train(
             n_iterations=int(sys.argv[1]),
@@ -286,6 +334,7 @@ def train():
 
 def replay():
     try:
+        Hospitalmas.runtime_log_file = _build_runtime_log_file()
         Hospitalmas().crew().replay(task_id=sys.argv[1])
     except Exception as e:
         raise Exception(f"An error occurred while replaying the crew: {e}") from e
@@ -298,6 +347,7 @@ def test():
         )
     }
     try:
+        Hospitalmas.runtime_log_file = _build_runtime_log_file()
         Hospitalmas.runtime_tools = _build_runtime_tools()
         Hospitalmas().crew().test(
             n_iterations=int(sys.argv[1]),
@@ -321,6 +371,7 @@ def run_with_trigger():
         "user_message": trigger_payload.get("user_message", ""),
     }
     try:
+        Hospitalmas.runtime_log_file = _build_runtime_log_file()
         Hospitalmas.runtime_tools = _build_runtime_tools()
         return Hospitalmas().diagnostic_crew().kickoff(inputs=inputs)
     except Exception as e:

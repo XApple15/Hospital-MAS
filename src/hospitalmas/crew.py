@@ -28,6 +28,7 @@ class Hospitalmas():
     tasks: list[Task]
 
     runtime_tools: list = []
+    runtime_log_file: str | None = None
 
     # ── Agents ───────────────────────────────────────────────────────────────
 
@@ -55,13 +56,13 @@ class Hospitalmas():
 
     @agent
     def symp_mapper(self) -> Agent:
-        symp_tools = [
+        ontology_tools = [
             t for t in self.runtime_tools
-            if getattr(t, "name", "") == "graphdb_symp_search"
+            if getattr(t, "name", "") == "graphdb_ontology_query"
         ]
         return Agent(
             config=self.agents_config['symp_mapper'],
-            tools=symp_tools,
+            tools=ontology_tools,
             verbose=True,
             allow_delegation=False,
             max_iter=18,
@@ -70,13 +71,13 @@ class Hospitalmas():
 
     @agent
     def disease_mapper(self) -> Agent:
-        sparql_tools = [
+        ontology_tools = [
             t for t in self.runtime_tools
-            if getattr(t, "name", "") == "graphdb_sparql_query"
+            if getattr(t, "name", "") == "graphdb_ontology_query"
         ]
         return Agent(
             config=self.agents_config['disease_mapper'],
-            tools=sparql_tools,
+            tools=ontology_tools,
             verbose=True,
             allow_delegation=False,
             max_iter=20,
@@ -96,13 +97,13 @@ class Hospitalmas():
 
     @agent
     def followup_interviewer(self) -> Agent:
-        followup_tools = [
+        ontology_tools = [
             t for t in self.runtime_tools
-            if getattr(t, "name", "") == "graphdb_disease_symptoms"
+            if getattr(t, "name", "") == "graphdb_ontology_query"
         ]
         return Agent(
             config=self.agents_config['followup_interviewer'],
-            tools=followup_tools,
+            tools=ontology_tools,
             verbose=True,
             allow_delegation=False,
             max_iter=8,
@@ -219,6 +220,7 @@ class Hospitalmas():
             manager_agent=self.orchestrator(),
             verbose=True,
             max_rpm=5,
+            output_log_file=self.runtime_log_file,
         )
 
     def refine_crew(self, ranking_json: str, followup_json: str) -> Crew:
@@ -233,4 +235,5 @@ class Hospitalmas():
             process=Process.sequential,
             verbose=True,
             max_rpm=5,
+            output_log_file=self.runtime_log_file,
         )
