@@ -91,8 +91,8 @@ query_diseases_for_symptoms_task:
       Record this entry with disease_candidates set to [] and status "skipped".
 
     CASE B - status is "mapped" AND parsed_symp_number is a non-empty digit string:
-      Build and execute the ontology relation query directly.
-      Use Disease-to-symptom restriction traversal with parsed_symp_number.
+      You have to call the tool to find associated diseases for this known symptom.
+      Find diseases linked to a known symptom with parsed_symp_number by calling graphdb_ontology_query tool.
       Call graphdb_ontology_query with:
       {"sparql_query": "<full query string>"}
 
