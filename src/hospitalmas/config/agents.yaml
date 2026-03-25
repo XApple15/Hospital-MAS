@@ -12,7 +12,7 @@ orchestrator:
     compliance, and only proceed when each stage is correctly completed.
 
 symptom_extractor:
-  llm: gpt-4.1-mini
+  llm: gpt-4.1-nano
   role: >
     Clinical Symptom Extraction Specialist
   goal: >
@@ -27,7 +27,7 @@ symptom_extractor:
     include duration, location, and onset if explicitly stated.
 
 symp_mapper:
-  llm: gpt-4.1-mini
+  llm: gpt-4.1-nano
   role: >
     SYMP Ontology Term Mapper
   goal: >

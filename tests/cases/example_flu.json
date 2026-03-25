@@ -1,0 +1,20 @@
+[
+  {
+    "id": "test_case_1",
+    "description": "First Test",
+    "user_message": "I have bone pain",
+    "min_diseases_found": 1,
+    "expected_diseases": ["asymptomatic dengue"],
+    "no_repeat_symptoms": ["bone pain"],
+    "followup_answers": {
+      "bleeding": "yes",
+      "fever": "yes",
+      "rash": "yes",
+      "joint pain": "yes",
+      "muscle pain": "yes",
+      "severe headache": "yes"
+    },
+    "skip": false,
+    "_note": "R"
+  }
+]
