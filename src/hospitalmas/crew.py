@@ -91,7 +91,7 @@ class Hospitalmas():
             tools=[],
             verbose=True,
             allow_delegation=False,
-            max_iter=3,
+            max_iter=10,
             max_retry_limit=1,
         )
 
@@ -106,7 +106,7 @@ class Hospitalmas():
             tools=ontology_tools,
             verbose=True,
             allow_delegation=False,
-            max_iter=8,
+            max_iter=20,
             max_retry_limit=2,
         )
 
