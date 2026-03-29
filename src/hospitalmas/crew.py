@@ -33,24 +33,13 @@ class Hospitalmas():
     # ── Agents ───────────────────────────────────────────────────────────────
 
     @agent
-    def orchestrator(self) -> Agent:
-        return Agent(
-            config=self.agents_config['orchestrator'],
-            tools=[],
-            verbose=True,
-            allow_delegation=True,
-            max_iter=20,
-            max_retry_limit=2,
-        )
-
-    @agent
     def symptom_extractor(self) -> Agent:
         return Agent(
             config=self.agents_config['symptom_extractor'],
             tools=[],
             verbose=True,
             allow_delegation=False,
-            max_iter=3,
+            max_iter=2,
             max_retry_limit=1,
         )
 
@@ -65,23 +54,28 @@ class Hospitalmas():
             tools=ontology_tools,
             verbose=True,
             allow_delegation=False,
-            max_iter=18,
+            max_iter=14,
             max_retry_limit=2,
         )
 
     @agent
     def disease_mapper(self) -> Agent:
+        # Prefer batch tool for disease queries; fall back to individual tool
+        batch_tools = [
+            t for t in self.runtime_tools
+            if getattr(t, "name", "") == "batch_disease_query"
+        ]
         ontology_tools = [
             t for t in self.runtime_tools
             if getattr(t, "name", "") == "graphdb_ontology_query"
         ]
         return Agent(
             config=self.agents_config['disease_mapper'],
-            tools=ontology_tools,
+            tools=batch_tools + ontology_tools,
             verbose=True,
             allow_delegation=False,
-            max_iter=20,
-            max_retry_limit=2,
+            max_iter=6,
+            max_retry_limit=1,
         )
 
     @agent
@@ -91,7 +85,7 @@ class Hospitalmas():
             tools=[],
             verbose=True,
             allow_delegation=False,
-            max_iter=10,
+            max_iter=2,
             max_retry_limit=1,
         )
 
@@ -106,8 +100,8 @@ class Hospitalmas():
             tools=ontology_tools,
             verbose=True,
             allow_delegation=False,
-            max_iter=20,
-            max_retry_limit=2,
+            max_iter=8,
+            max_retry_limit=1,
         )
 
     @agent
@@ -117,7 +111,7 @@ class Hospitalmas():
             tools=[],
             verbose=True,
             allow_delegation=False,
-            max_iter=4,
+            max_iter=2,
             max_retry_limit=1,
         )
 
@@ -201,6 +195,9 @@ class Hospitalmas():
         """
         Phase 1: full diagnostic pipeline up to and including question generation.
         Does NOT include the refiner — main.py pauses here for human input.
+
+        Uses sequential process — tasks have a strict linear dependency chain,
+        so hierarchical orchestration adds overhead without benefit.
         """
         return Crew(
             agents=[
@@ -217,10 +214,9 @@ class Hospitalmas():
                 self.rank_diagnoses_task(),
                 self.clarify_followup_symptoms_task(),
             ],
-            process=Process.hierarchical,
-            manager_agent=self.orchestrator(),
+            process=Process.sequential,
             verbose=True,
-            max_rpm=5,
+            max_rpm=12,
             output_log_file=self.runtime_log_file,
         )
 
@@ -235,6 +231,6 @@ class Hospitalmas():
             tasks=[self.refine_diagnosis_task_dynamic(ranking_json, followup_json)],
             process=Process.sequential,
             verbose=True,
-            max_rpm=5,
+            max_rpm=12,
             output_log_file=self.runtime_log_file,
         )

@@ -47,6 +47,7 @@ from typing import Any
 
 from hospitalmas.crew import Hospitalmas
 from hospitalmas.tools.graphdb_ontology_query_tool import GraphDbOntologyQueryTool
+from hospitalmas.tools.batch_disease_query_tool import BatchDiseaseQueryTool
 
 
 # ── Self-contained helpers (avoid fragile imports from main.py) ───────────────
@@ -54,7 +55,7 @@ from hospitalmas.tools.graphdb_ontology_query_tool import GraphDbOntologyQueryTo
 # regardless of how main.py's private names are resolved at import time.
 
 def _build_runtime_tools() -> list:
-    return [GraphDbOntologyQueryTool()]
+    return [GraphDbOntologyQueryTool(), BatchDiseaseQueryTool()]
 
 
 def _build_runtime_log_file() -> str:

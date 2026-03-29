@@ -32,33 +32,31 @@ extract_symptoms_task:
     "skin rash"            → use just "rash"
 
     ── REQUIRED MAPPINGS (use the RIGHT side as "name") ──────────────
-    "skin rash with red spots"          → "rash"
-    "persistent joint pain"             → "joint pain"
-    "severe headache"                   → "headache"
-    "dry persistent cough"              → "cough"
-    "sharp abdominal pain"              → "abdominal pain"
-    "dark concentrated urine"           → "dark urine"
-    "significant weight loss"           → "weight loss"
-    "excessive sweating"                → "sweating"
-    "widespread skin rash"              → "rash"
-    "swollen lymph nodes in neck"       → "swollen lymph nodes"
-    "yellowing of eyes"                 → "jaundice"
-    "yellowing of skin and eyes"        → "jaundice"
-    "yellowing of his skin and eyes"    → "jaundice"
-    "yellowish skin"                    → "jaundice"
-    "yellow skin"                       → "jaundice"
-    "yellow eyes"                       → "jaundice"
-    "yellow discoloration of skin"      → "jaundice"
-    "yellow discoloration of eyes"      → "jaundice"
+    "skin rash with red spots"   → "rash"
+    "persistent joint pain"      → "joint pain"
+    "severe headache"            → "headache"
+    "dry persistent cough"       → "cough"
+    "sharp abdominal pain"       → "abdominal pain"
+    "dark concentrated urine"    → "dark urine"
+    "significant weight loss"    → "weight loss"
+    "excessive sweating"         → "sweating"
+    "widespread skin rash"       → "rash"
+    "swollen lymph nodes in neck"→ "swollen lymph nodes"
+    "stomach bleeding"           → "gastrointestinal hemorrhage"
+    "indications of stomach bleeding" → "gastrointestinal hemorrhage"
+    "unresponsive" / "unresponsiveness" → "coma"
+    "became unresponsive"        → "coma"
+    "fell into a coma"           → "coma"
 
     These are ALWAYS valid as-is (do not simplify further):
     "loss of appetite", "swollen lymph nodes", "high fever",
     "blurred and distorted vision", "dark urine", "chest pain",
     "joint pain", "muscle pain", "back pain", "belly pain",
-    "red spots over body", "jaundice",
-    "mood swings", "fast heart rate", "muscle weakness",
+    "red spots over body", "jaundice", "mood swings",
+    "fast heart rate", "muscle weakness",
     "skin peeling", "spinning movements", "loss of balance",
-    "passage of gases", "internal itching", "burning micturition"
+    "passage of gases", "internal itching", "burning micturition",
+    "gastrointestinal hemorrhage", "coma"
 
     ── COMPOUND SPLITTING ────────────────────────────────────────────
     "nausea and vomiting" → two entries: "nausea" + "vomiting"
@@ -138,6 +136,8 @@ map_symptoms_to_symp_task:
       "yellowish skin" ↔ "jaundice"
       "spinning movements" ↔ "vertigo"
       "tiredness" ↔ "fatigue"
+      "unresponsiveness" ↔ "unconsciousness" or "coma" or "stupor"
+      "stomach bleeding" ↔ "gastrointestinal hemorrhage" or "hematemesis" or "bleeding"
 
     You MUST attempt at least 2 retries using different simplification or
     synonym strategies before marking any symptom as unmapped.
@@ -178,48 +178,44 @@ query_diseases_for_symptoms_task:
   description: >
     You will receive the symp_mappings list from the map_symptoms_to_symp_task output.
 
-    CRITICAL TOOL CONTRACT:
-    graphdb_ontology_query only runs the exact sparql_query payload you provide.
-    It does not infer intent, fill missing parts, or generate a query for you.
-    You must decide query intent and author the query.
-    Use the graphdb_ontology_query tool description for query-construction rules.
+    ★★★ EFFICIENCY RULE — USE BATCH TOOL ★★★
+    You have TWO tools available:
+    1. batch_disease_query  — queries diseases for MULTIPLE symptoms in ONE call (PREFERRED)
+    2. graphdb_ontology_query — queries diseases for ONE symptom per call (FALLBACK only)
 
-    For each entry in symp_mappings, follow EXACTLY one of these two cases:
+    STEP 1: Separate mapped from unmapped symptoms.
+    For each entry in symp_mappings:
+    - If status is "unmapped" OR parsed_symp_number is null or empty:
+      Record with disease_candidates=[], status="skipped". No tool call needed.
+    - If status is "mapped" AND matched_symp_uri is a valid URI:
+      Collect the matched_symp_uri into a batch list.
 
-    CASE A - status is "unmapped" OR parsed_symp_number is null or empty:
-      Do NOT call any tool.
-      Record this entry with disease_candidates set to [] and status "skipped".
+    STEP 2: Call batch_disease_query ONCE with all mapped URIs.
+    Call batch_disease_query with:
+    {"symptom_uris": ["http://purl.obolibrary.org/obo/SYMP_0000064", "http://purl.obolibrary.org/obo/SYMP_0019177", ...]}
 
-    CASE B - status is "mapped" AND parsed_symp_number is a non-empty digit string:
-      You have to call the tool to find associated diseases for this known symptom.
-      Find diseases linked to a known symptom by calling graphdb_ontology_query tool.
+    The tool returns a JSON object with a "results" map keyed by symptom URI.
+    Each value contains "disease_candidates" (list of label strings) and
+    "disease_entries" (list of {disease_uri, disease_label} objects).
 
-      Use EXACTLY this SPARQL query. Replace ONLY <SYMPTOM_URI_PLACEHOLDER> with the actual
-      matched_symp_uri value in angle brackets (e.g. <http://purl.obolibrary.org/obo/SYMP_0000457>).
-      Do NOT change anything else in the query — not the variable names, not the property, not the structure.
+    STEP 3: Distribute results back to each symptom entry.
+    For each mapped symptom, look up its URI in the batch results and copy
+    disease_candidates and disease_entries verbatim.
 
-      PREFIX owl:  <http://www.w3.org/2002/07/owl#>
-      PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-      PREFIX ro:   <http://purl.obolibrary.org/obo/RO_>
-      SELECT ?disease ?diseaseLabel
-      WHERE {
-        ?disease rdfs:subClassOf ?restriction .
-        ?restriction owl:onProperty ro:0002452 .
-        ?restriction owl:someValuesFrom <SYMPTOM_URI_PLACEHOLDER> .
-        ?disease rdfs:label ?diseaseLabel .
-        FILTER(LANG(?diseaseLabel) = "en")
-      }
+    STEP 4 (FALLBACK): If batch_disease_query fails, retry individual
+    symptoms using graphdb_ontology_query with this SPARQL query pattern:
 
-      Call graphdb_ontology_query with:
-      {"sparql_query": "<the query above with the real URI substituted>"}
-
-      Read the "disease_candidates"
-      array from tool result. Copy every string verbatim into
-      this entry's disease_candidates. Do not modify any string.
-
-      Also parse "disease_rows" from the same response. For each row,
-      copy disease URI and label exactly as returned into disease_entries.
-      Prefer row.disease_uri if present, otherwise row.disease_iri.
+    PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX ro:   <http://purl.obolibrary.org/obo/RO_>
+    SELECT ?disease ?diseaseLabel
+    WHERE {
+      ?disease rdfs:subClassOf ?restriction .
+      ?restriction owl:onProperty ro:0002452 .
+      ?restriction owl:someValuesFrom <SYMPTOM_URI_HERE> .
+      ?disease rdfs:label ?diseaseLabel .
+      FILTER(LANG(?diseaseLabel) = "en")
+    }
 
     ABSOLUTE RULES:
     - disease_candidates must contain ONLY strings from the tool response.
@@ -229,8 +225,6 @@ query_diseases_for_symptoms_task:
     - NEVER copy disease names from examples, instructions, or memory.
     - If the tool returns an empty "disease_candidates" array, record []
       and set status "no_diseases". This is a correct and valid result.
-    - If tool call fails, retry up to 2 times with a repaired SPARQL query.
-      After 2 failures record [] and status "tool_failure". Never fabricate.
     - An empty disease_candidates list is always correct over any fabrication.
 
     Process ALL entries before returning. Do not stop early.
@@ -409,8 +403,22 @@ clarify_followup_symptoms_task:
 
     Step 1 - Select candidate diseases for profiling.
       Take all diseases with HIGH or MEDIUM confidence from differential_diagnosis.
-      Also include any LOW-confidence diseases whose co_occurrence_score equals
-      the highest co_occurrence_score present (ties at the top).
+      Also include any LOW-confidence diseases whose composite_score equals
+      the highest composite_score present (ties at the top).
+
+      ★★★ CRITICAL TIE-HANDLING RULE ★★★
+      If multiple diseases share the SAME composite_score at any confidence tier
+      (e.g. three diseases all scored 3.970 with HIGH confidence), you MUST
+      profile ALL of them — not just the first one in the list.
+      Profiling only one disease out of a tied group produces zero discriminative
+      questions and makes follow-up useless.
+
+      ★★★ MINIMUM CANDIDATE RULE ★★★
+      If the selected set contains fewer than 2 diseases after the above rules,
+      expand downward: add the next-highest-ranked diseases until you have at
+      least 2 candidates to compare (or you run out of diseases in the ranking).
+      Discriminative follow-up requires at least 2 disease profiles to compare.
+
       Cap the candidate set at 5 diseases.
 
     Step 2 - Fetch symptom profiles.
@@ -463,9 +471,22 @@ clarify_followup_symptoms_task:
       Apply these checks. If ANY apply, classify as patient_reportable:
       1. Patient directly feels/experiences it? (fever/feeling hot, cough/coughing, pain/hurt,
          nausea/feeling sick, dizziness/feeling faint, fatigue/tiredness)
-      2. Patient can directly observe it? (bleeding they see, rash/spots they see, swelling they feel)
+      2. Patient can directly observe it? (bleeding they see, rash/spots they see, swelling they feel,
+         stool color changes they notice, abdominal distension/swelling they see or feel)
       3. Patient can describe it without equipment? (Yes = patient_reportable)
       4. It's a subjective symptom or patient-observable sign? (Yes = patient_reportable)
+
+      ★★★ COMMONLY MISCLASSIFIED — THESE ARE PATIENT_REPORTABLE ★★★
+      The following are symptoms patients CAN observe/report — do NOT classify
+      them as investigation_required:
+      - acholic stool / pale stool / clay-colored stool → patient sees stool color
+      - ascites / abdominal swelling / belly distension → patient feels/sees swollen belly
+      - fever → patient feels hot, can use home thermometer
+      - dark urine → patient sees urine color
+      - bleeding (any visible) → patient sees blood
+      - skin rash / rash → patient sees skin changes
+      Only classify as investigation_required if detecting it truly requires
+      professional equipment (lab machines, imaging, stethoscope, etc.).
 
       ★★★ MANDATORY SEPARATION STEP ★★★
       STEP B: Create TWO SEPARATE LISTS after classification:

@@ -11,6 +11,7 @@ from typing import Any
 
 from hospitalmas.crew import Hospitalmas
 from hospitalmas.tools.graphdb_ontology_query_tool import GraphDbOntologyQueryTool
+from hospitalmas.tools.batch_disease_query_tool import BatchDiseaseQueryTool
 from hospitalmas.answer_collector import (
     AnswerCollector,
     TerminalAnswerCollector,
@@ -25,6 +26,7 @@ warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 def _build_runtime_tools() -> list:
     return [
         GraphDbOntologyQueryTool(),
+        BatchDiseaseQueryTool(),
     ]
 
 
