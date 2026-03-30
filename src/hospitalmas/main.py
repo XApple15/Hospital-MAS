@@ -11,7 +11,6 @@ from typing import Any
 
 from hospitalmas.crew import Hospitalmas
 from hospitalmas.tools.graphdb_ontology_query_tool import GraphDbOntologyQueryTool
-from hospitalmas.tools.batch_disease_query_tool import BatchDiseaseQueryTool
 from hospitalmas.answer_collector import (
     AnswerCollector,
     TerminalAnswerCollector,
@@ -26,7 +25,6 @@ warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 def _build_runtime_tools() -> list:
     return [
         GraphDbOntologyQueryTool(),
-        BatchDiseaseQueryTool(),
     ]
 
 
@@ -200,6 +198,13 @@ async def run_diagnostic_pipeline(
         return ranking_payload
 
     if not followup_payload:
+        return ranking_payload
+
+    # ── Check if follow-up produced any questions ─────────────────────
+    questions = followup_payload.get("questions_asked") or []
+    if not questions:
+        print("\n[Phase 2 skipped] No follow-up questions were generated — "
+              "returning Phase 1 ranking as final result.\n")
         return ranking_payload
 
     # ── Human-in-the-loop: collect patient answers ─────────────────────

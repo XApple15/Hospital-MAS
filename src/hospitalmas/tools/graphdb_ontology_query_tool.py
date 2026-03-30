@@ -72,13 +72,14 @@ class GraphDbOntologyQueryTool(BaseTool):
 
         # Pattern 1
         "--- PATTERN 1: Find symptom terms by label text (case-insensitive) ---\n"
-        "Use case: You have a symptom name string and need its SYMP URI.\n"
+        "Use case: You have a symptom name string and need its SYMP URI (SYMP-only scope).\n"
         "Placeholder: {{LOWERCASED_SEARCH_TERM}} = your symptom text, all lowercase.\n"
         "\n"
         "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
         "SELECT ?symptom ?symptomLabel\n"
         "WHERE {\n"
         "  ?symptom rdfs:label ?symptomLabel .\n"
+        "  FILTER(STRSTARTS(STR(?symptom), \"http://purl.obolibrary.org/obo/SYMP_\"))\n"
         "  FILTER(CONTAINS(LCASE(STR(?symptomLabel)), \"{{LOWERCASED_SEARCH_TERM}}\"))\n"
         "}\n"
         "\n"

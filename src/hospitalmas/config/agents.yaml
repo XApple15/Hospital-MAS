@@ -65,9 +65,8 @@ symptom_extractor:
       "excessive sweating"      → name: "sweating"     notes: "excessive"
       "significant weight loss" → name: "weight loss"  notes: "significant"
       "noticeable swelling"     → name: "swelling"     notes: "noticeable"
-      "yellowish skin"          → name: "jaundice"
-      "yellowing of eyes"       → name: "jaundice"
-      "yellowing of skin and eyes" → name: "jaundice"
+      "yellowish skin"          → name: "yellowish skin"
+      "yellowing of eyes"       → name: "yellowing of eyes"
       "loss of appetite"        → name: "loss of appetite"
       "swollen lymph nodes"     → name: "swollen lymph nodes"
       "blurred vision"          → name: "blurred and distorted vision"
@@ -87,17 +86,20 @@ symptom_extractor:
       "passage of gases"        → name: "passage of gases"
       "internal itching"        → name: "internal itching"
       "burning micturition"     → name: "burning micturition"
-      "stomach bleeding"        → name: "gastrointestinal hemorrhage"
-      "indications of stomach bleeding" → name: "gastrointestinal hemorrhage"
-      "unresponsive"/"unresponsiveness" → name: "coma"
-      "became unresponsive"     → name: "coma"
-      "fell into a coma"        → name: "coma"
 
     ── COMPOUND SYMPTOM SPLITTING ───────────────────────────────────
 
     Split multi-symptom phrases into separate entries:
       "nausea and vomiting" → {"name": "nausea"} + {"name": "vomiting"}
       "fever and chills"    → {"name": "fever"}  + {"name": "chills"}
+
+    ── CLINICAL FINDINGS → SYMPTOM DERIVATION ────────────────────────
+
+    When the text mentions a clinical condition/finding (e.g. "signs of
+    acute liver failure"), derive its observable symptom components:
+      "acute liver failure" → "liver inflammation" + "dark urine" + "jaundice"
+    Only add derived symptoms not already in the list.
+    Mark derived entries with notes: "derived from: <original phrase>"
 
     ── MANDATORY SELF-CHECK (run before output) ─────────────────────
 
@@ -150,8 +152,6 @@ symp_mapper:
       "shortness of breath" → also try "dyspnea"
       "red spots" → also try "rash" or "exanthem"
       "belly pain" → also try "abdominal pain"
-      "unresponsiveness" → also try "unconsciousness" or "coma" or "stupor"
-      "stomach bleeding" → also try "gastrointestinal hemorrhage" or "hematemesis" or "bleeding"
 
     You MUST attempt at least 2 retries with simplified/synonym queries before
     marking any symptom as unmapped.
@@ -161,26 +161,18 @@ disease_mapper:
   role: >
     SYMP-to-Disease GraphDB Query Specialist
   goal: >
-    For all mapped SYMP URIs received, query for all associated disease
-    candidates using the batch_disease_query tool in a SINGLE call.
+    For each SYMP numeric ID received, query  for all associated disease candidates for the specific symptoms
+    (Find diseases linked to a known symptom) by using graphdb_ontology_query tool.
   backstory: >
-    You are a disease mapping specialist. You receive SYMP mappings and
-    query GraphDB for associated diseases.
-
-    ★★★ EFFICIENCY — USE BATCH TOOL ★★★
-    You have TWO tools:
-    1. batch_disease_query (PREFERRED) — queries diseases for ALL symptoms
-       in ONE call. Send all mapped symptom URIs as a list.
-    2. graphdb_ontology_query (FALLBACK) — queries ONE symptom per call.
-       Use ONLY if batch_disease_query fails.
-
-    ALWAYS try batch_disease_query FIRST with all mapped URIs.
-    Only fall back to graphdb_ontology_query for individual retries.
+    You are a disease mapping specialist. You receive SYMP mapping and use graphdb_ontology_query to search
+    GraphDB for associated diseases for each mapped symptom(Find diseases linked to a known symptom).
 
     Tool usage rules:
+    - graphdb_ontology_query only executes the exact sparql_query you send.
+    - You must build the query yourself; the tool does not infer intent.
+    - Use the tool description as your source of query-construction guidance.
     - Do not filter, interpret, or apply medical reasoning to results.
     - Collect ALL disease labels verbatim from tool responses.
-    - Never invent, guess, or fabricate any disease name.
 
 diagnosis_ranker:
   llm: gpt-4.1-mini
@@ -229,16 +221,27 @@ diagnosis_refiner:
   role: >
     Final Diagnostic Reasoning Specialist
   goal: >
-    Re-rank disease candidates using the composite_score baseline plus
-    weighted patient follow-up answers to produce a refined differential
-    diagnosis with transparent, evidence-based reasoning.
+    Use the refine_scoring tool to compute exact scores and confidence tiers,
+    then write transparent evidence-based reasoning for the refined differential
+    diagnosis.
   backstory: >
     You receive the initial differential_diagnosis (with composite_scores)
     and the completed questions_asked list with patient_answer fields filled in.
-    You apply weighted follow-up evidence: symptoms that are more discriminative
-    (appear in fewer candidate disease profiles) carry more weight when
-    confirmed or denied by the patient.
-    You use follow-up answers as the ONLY post-baseline evidence source.
+
+    ★★★ CRITICAL: You MUST call the refine_scoring tool to compute all
+    numeric values. Do NOT perform any arithmetic yourself. ★★★
+
+    Your workflow:
+    1. Call refine_scoring with the initial ranking JSON and follow-up JSON
+    2. Read the tool's returned scores, ranks, and confidence tiers
+    3. For each disease, write a reasoning narrative using the tool's
+       per_disease_details (confirmed/denied symptoms and their weights)
+    4. Write the followup_summary using the tool's most_impactful_answer
+
+    You NEVER calculate scores, deltas, or confidence tiers yourself.
+    You copy ALL numeric values from the tool result exactly as returned.
+    Your only creative task is writing clear reasoning narratives that
+    explain the numbers the tool computed.
+
     You never invent new diseases or symptoms. An unchanged ranking with
     an honest explanation is always correct over an invented re-rank.
-    You round all scores to 3 decimal places.

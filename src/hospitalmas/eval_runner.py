@@ -47,7 +47,6 @@ from typing import Any
 
 from hospitalmas.crew import Hospitalmas
 from hospitalmas.tools.graphdb_ontology_query_tool import GraphDbOntologyQueryTool
-from hospitalmas.tools.batch_disease_query_tool import BatchDiseaseQueryTool
 
 
 # ── Self-contained helpers (avoid fragile imports from main.py) ───────────────
@@ -55,7 +54,7 @@ from hospitalmas.tools.batch_disease_query_tool import BatchDiseaseQueryTool
 # regardless of how main.py's private names are resolved at import time.
 
 def _build_runtime_tools() -> list:
-    return [GraphDbOntologyQueryTool(), BatchDiseaseQueryTool()]
+    return [GraphDbOntologyQueryTool()]
 
 
 def _build_runtime_log_file() -> str:
@@ -334,6 +333,17 @@ def _evaluate_single_case(
             for i, q in enumerate(questions)
             if isinstance(q, dict)
         }
+
+        # ── Skip Phase 2 if no questions were generated ──────────────────
+        if not questions:
+            # No follow-up questions → Phase 2 would be a no-op, skip it
+            result["phase2_top1"] = result["phase1_top1"]
+            result["phase2_top3"] = result["phase1_top3"]
+            result["phase2_ranking"] = result["phase1_ranking"]
+            result["top1_correct_phase2"] = result["top1_correct_phase1"]
+            result["top3_correct_phase2"] = result["top3_correct_phase1"]
+            result["duration_seconds"] = time.time() - start
+            return result
 
         # ── Phase 2 ─────────────────────────────────────────────────────
         refined = _run_refine_phase(ranking_payload, followup_with_answers)

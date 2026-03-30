@@ -42,21 +42,15 @@ extract_symptoms_task:
     "excessive sweating"         → "sweating"
     "widespread skin rash"       → "rash"
     "swollen lymph nodes in neck"→ "swollen lymph nodes"
-    "stomach bleeding"           → "gastrointestinal hemorrhage"
-    "indications of stomach bleeding" → "gastrointestinal hemorrhage"
-    "unresponsive" / "unresponsiveness" → "coma"
-    "became unresponsive"        → "coma"
-    "fell into a coma"           → "coma"
 
     These are ALWAYS valid as-is (do not simplify further):
     "loss of appetite", "swollen lymph nodes", "high fever",
     "blurred and distorted vision", "dark urine", "chest pain",
     "joint pain", "muscle pain", "back pain", "belly pain",
-    "red spots over body", "jaundice", "mood swings",
-    "fast heart rate", "muscle weakness",
+    "red spots over body", "yellowish skin", "yellowing of eyes",
+    "mood swings", "fast heart rate", "muscle weakness",
     "skin peeling", "spinning movements", "loss of balance",
-    "passage of gases", "internal itching", "burning micturition",
-    "gastrointestinal hemorrhage", "coma"
+    "passage of gases", "internal itching", "burning micturition"
 
     ── COMPOUND SPLITTING ────────────────────────────────────────────
     "nausea and vomiting" → two entries: "nausea" + "vomiting"
@@ -136,8 +130,6 @@ map_symptoms_to_symp_task:
       "yellowish skin" ↔ "jaundice"
       "spinning movements" ↔ "vertigo"
       "tiredness" ↔ "fatigue"
-      "unresponsiveness" ↔ "unconsciousness" or "coma" or "stupor"
-      "stomach bleeding" ↔ "gastrointestinal hemorrhage" or "hematemesis" or "bleeding"
 
     You MUST attempt at least 2 retries using different simplification or
     synonym strategies before marking any symptom as unmapped.
@@ -178,44 +170,48 @@ query_diseases_for_symptoms_task:
   description: >
     You will receive the symp_mappings list from the map_symptoms_to_symp_task output.
 
-    ★★★ EFFICIENCY RULE — USE BATCH TOOL ★★★
-    You have TWO tools available:
-    1. batch_disease_query  — queries diseases for MULTIPLE symptoms in ONE call (PREFERRED)
-    2. graphdb_ontology_query — queries diseases for ONE symptom per call (FALLBACK only)
+    CRITICAL TOOL CONTRACT:
+    graphdb_ontology_query only runs the exact sparql_query payload you provide.
+    It does not infer intent, fill missing parts, or generate a query for you.
+    You must decide query intent and author the query.
+    Use the graphdb_ontology_query tool description for query-construction rules.
 
-    STEP 1: Separate mapped from unmapped symptoms.
-    For each entry in symp_mappings:
-    - If status is "unmapped" OR parsed_symp_number is null or empty:
-      Record with disease_candidates=[], status="skipped". No tool call needed.
-    - If status is "mapped" AND matched_symp_uri is a valid URI:
-      Collect the matched_symp_uri into a batch list.
+    For each entry in symp_mappings, follow EXACTLY one of these two cases:
 
-    STEP 2: Call batch_disease_query ONCE with all mapped URIs.
-    Call batch_disease_query with:
-    {"symptom_uris": ["http://purl.obolibrary.org/obo/SYMP_0000064", "http://purl.obolibrary.org/obo/SYMP_0019177", ...]}
+    CASE A - status is "unmapped" OR parsed_symp_number is null or empty:
+      Do NOT call any tool.
+      Record this entry with disease_candidates set to [] and status "skipped".
 
-    The tool returns a JSON object with a "results" map keyed by symptom URI.
-    Each value contains "disease_candidates" (list of label strings) and
-    "disease_entries" (list of {disease_uri, disease_label} objects).
+    CASE B - status is "mapped" AND parsed_symp_number is a non-empty digit string:
+      You have to call the tool to find associated diseases for this known symptom.
+      Find diseases linked to a known symptom by calling graphdb_ontology_query tool.
 
-    STEP 3: Distribute results back to each symptom entry.
-    For each mapped symptom, look up its URI in the batch results and copy
-    disease_candidates and disease_entries verbatim.
+      Use EXACTLY this SPARQL query. Replace ONLY <SYMPTOM_URI_PLACEHOLDER> with the actual
+      matched_symp_uri value in angle brackets (e.g. <http://purl.obolibrary.org/obo/SYMP_0000457>).
+      Do NOT change anything else in the query — not the variable names, not the property, not the structure.
 
-    STEP 4 (FALLBACK): If batch_disease_query fails, retry individual
-    symptoms using graphdb_ontology_query with this SPARQL query pattern:
+      PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+      PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+      PREFIX ro:   <http://purl.obolibrary.org/obo/RO_>
+      SELECT ?disease ?diseaseLabel
+      WHERE {
+        ?disease rdfs:subClassOf ?restriction .
+        ?restriction owl:onProperty ro:0002452 .
+        ?restriction owl:someValuesFrom <SYMPTOM_URI_PLACEHOLDER> .
+        ?disease rdfs:label ?diseaseLabel .
+        FILTER(LANG(?diseaseLabel) = "en")
+      }
 
-    PREFIX owl:  <http://www.w3.org/2002/07/owl#>
-    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-    PREFIX ro:   <http://purl.obolibrary.org/obo/RO_>
-    SELECT ?disease ?diseaseLabel
-    WHERE {
-      ?disease rdfs:subClassOf ?restriction .
-      ?restriction owl:onProperty ro:0002452 .
-      ?restriction owl:someValuesFrom <SYMPTOM_URI_HERE> .
-      ?disease rdfs:label ?diseaseLabel .
-      FILTER(LANG(?diseaseLabel) = "en")
-    }
+      Call graphdb_ontology_query with:
+      {"sparql_query": "<the query above with the real URI substituted>"}
+
+      Read the "disease_candidates"
+      array from tool result. Copy every string verbatim into
+      this entry's disease_candidates. Do not modify any string.
+
+      Also parse "disease_rows" from the same response. For each row,
+      copy disease URI and label exactly as returned into disease_entries.
+      Prefer row.disease_uri if present, otherwise row.disease_iri.
 
     ABSOLUTE RULES:
     - disease_candidates must contain ONLY strings from the tool response.
@@ -225,6 +221,8 @@ query_diseases_for_symptoms_task:
     - NEVER copy disease names from examples, instructions, or memory.
     - If the tool returns an empty "disease_candidates" array, record []
       and set status "no_diseases". This is a correct and valid result.
+    - If tool call fails, retry up to 2 times with a repaired SPARQL query.
+      After 2 failures record [] and status "tool_failure". Never fabricate.
     - An empty disease_candidates list is always correct over any fabrication.
 
     Process ALL entries before returning. Do not stop early.
@@ -403,22 +401,8 @@ clarify_followup_symptoms_task:
 
     Step 1 - Select candidate diseases for profiling.
       Take all diseases with HIGH or MEDIUM confidence from differential_diagnosis.
-      Also include any LOW-confidence diseases whose composite_score equals
-      the highest composite_score present (ties at the top).
-
-      ★★★ CRITICAL TIE-HANDLING RULE ★★★
-      If multiple diseases share the SAME composite_score at any confidence tier
-      (e.g. three diseases all scored 3.970 with HIGH confidence), you MUST
-      profile ALL of them — not just the first one in the list.
-      Profiling only one disease out of a tied group produces zero discriminative
-      questions and makes follow-up useless.
-
-      ★★★ MINIMUM CANDIDATE RULE ★★★
-      If the selected set contains fewer than 2 diseases after the above rules,
-      expand downward: add the next-highest-ranked diseases until you have at
-      least 2 candidates to compare (or you run out of diseases in the ranking).
-      Discriminative follow-up requires at least 2 disease profiles to compare.
-
+      Also include any LOW-confidence diseases whose co_occurrence_score equals
+      the highest co_occurrence_score present (ties at the top).
       Cap the candidate set at 5 diseases.
 
     Step 2 - Fetch symptom profiles.
@@ -456,37 +440,44 @@ clarify_followup_symptoms_task:
       - investigation_required, OR
       - patient_reportable
 
-      INVESTIGATION_REQUIRED classification rule:
-      Apply these checks IN ORDER. If ANY apply, classify as investigation_required:
+      ★★★ CLASSIFICATION PRIORITY: patient_reportable WINS OVER investigation_required ★★★
+      If a symptom could be classified EITHER way, it is patient_reportable.
+      The question is: "Could a patient notice or feel this WITHOUT medical equipment?"
+      If yes → patient_reportable. Period.
+
+      PATIENT_REPORTABLE classification rule (CHECK THIS FIRST):
+      Apply these checks FIRST. If ANY apply, classify as patient_reportable:
+      1. Patient directly feels/experiences it? (fever, cough, pain, nausea,
+         dizziness, fatigue, drowsiness, confusion, lethargy, sleep disturbance)
+      2. Patient can directly observe it? (bleeding, rash, swelling, dark urine,
+         acholic/pale stool, yellowing skin, hair loss)
+      3. Patient can describe it without equipment? (Yes = patient_reportable)
+      4. It's a subjective symptom or patient-observable sign? (Yes = patient_reportable)
+      5. A caregiver or family member could notice it? (confusion, abnormal behavior,
+         drowsiness, lethargy, personality changes → patient_reportable)
+
+      EXPLICIT PATIENT_REPORTABLE EXAMPLES (never classify these as investigation_required):
+        confusion, drowsiness, lethargy, sleep disturbance, abnormal behavior,
+        dark urine, acholic stool, pale stool, ascites (swollen belly),
+        bleeding, bruising, rash, skin discoloration, appetite changes,
+        weight loss, weight gain, mood changes, memory problems, tremor,
+        numbness, tingling, blurred vision, hearing loss, tinnitus
+
+      INVESTIGATION_REQUIRED classification rule (CHECK ONLY IF NOT patient_reportable):
+      Apply these checks ONLY for symptoms that failed ALL patient_reportable checks above:
       1. Does it require specialized equipment to detect? (BP cuff, oximeter, ECG, lab machine, imaging)
       2. Is it a measurement/lab value? (e.g., "120/80 mmHg", "glucose 95 mg/dL", "WBC 5K")
       3. Is it a biomarker or lab finding? (enzymes, counts, levels, CRP, liver function tests)
       4. Is it an imaging/radiology result? (X-ray/CT/MRI/ultrasound findings)
-      5. Does it require professional clinical assessment? (heart murmurs detected by stethoscope,
-         retinal findings, some skin signs requiring magnification)
-      6. Does the symptom name contain measurement keywords? (pressure, saturation, heart rate,
+      5. Does it require equipment-based clinical assessment? (heart murmurs via stethoscope,
+         retinal findings via ophthalmoscope, microscopy findings)
+      6. Does the symptom name contain measurement keywords? (pressure, saturation,
          count, enzyme, level, finding, imaging, ECG, EKG, result, test)
 
-      PATIENT_REPORTABLE classification rule:
-      Apply these checks. If ANY apply, classify as patient_reportable:
-      1. Patient directly feels/experiences it? (fever/feeling hot, cough/coughing, pain/hurt,
-         nausea/feeling sick, dizziness/feeling faint, fatigue/tiredness)
-      2. Patient can directly observe it? (bleeding they see, rash/spots they see, swelling they feel,
-         stool color changes they notice, abdominal distension/swelling they see or feel)
-      3. Patient can describe it without equipment? (Yes = patient_reportable)
-      4. It's a subjective symptom or patient-observable sign? (Yes = patient_reportable)
-
-      ★★★ COMMONLY MISCLASSIFIED — THESE ARE PATIENT_REPORTABLE ★★★
-      The following are symptoms patients CAN observe/report — do NOT classify
-      them as investigation_required:
-      - acholic stool / pale stool / clay-colored stool → patient sees stool color
-      - ascites / abdominal swelling / belly distension → patient feels/sees swollen belly
-      - fever → patient feels hot, can use home thermometer
-      - dark urine → patient sees urine color
-      - bleeding (any visible) → patient sees blood
-      - skin rash / rash → patient sees skin changes
-      Only classify as investigation_required if detecting it truly requires
-      professional equipment (lab machines, imaging, stethoscope, etc.).
+      EXPLICIT INVESTIGATION_REQUIRED EXAMPLES (never classify these as patient_reportable):
+        thrombocytopenia, elevated liver enzymes, low platelet count, hypotension,
+        proteinuria, leukocytosis, anemia (lab-confirmed), splenomegaly (imaging),
+        pleural effusion (imaging), heart murmur (auscultation)
 
       ★★★ MANDATORY SEPARATION STEP ★★★
       STEP B: Create TWO SEPARATE LISTS after classification:
@@ -543,6 +534,13 @@ clarify_followup_symptoms_task:
     - Call graphdb_ontology_query ONLY with SPARQL queries built from URIs in disease_entries.
     - Never invent disease URIs, symptom URIs, or symptom labels.
     - Never ask about a symptom the patient already confirmed.
+    ★★★ CRITICAL: patient_reportable classification WINS when a symptom could go either way.
+    ★★★ CRITICAL: If a patient can feel, experience, or observe it → patient_reportable. No exceptions.
+    ★★★ CRITICAL: confusion, drowsiness, lethargy, sleep disturbance, abnormal behavior,
+    ★★★          dark urine, acholic stool, ascites (swollen belly) are ALL patient_reportable.
+    ★★★ CRITICAL: investigations_required list must contain ONLY investigation_required items.
+    ★★★          Do NOT put patient_reportable items in investigations_required.
+    ★★★          patient_reportable items that are already confirmed go NOWHERE (just skip them).
     ★★★ CRITICAL: Copy SPARQL patterns EXACTLY from graphdb_ontology_query tool description.
     ★★★ CRITICAL: Do NOT add FILTER(LANG(...)) or any filters NOT shown in the patterns.
     ★★★ CRITICAL: Deviating from patterns = zero results = failed queries. Follow patterns exactly.
@@ -551,9 +549,10 @@ clarify_followup_symptoms_task:
     ★★★ CRITICAL: investigation_required symptoms MUST NOT appear in questions_asked under ANY circumstance.
     ★★★ CRITICAL: Do NOT ask about hypotension, shock, thrombocytopenia, or ANY investigation_required finding.
     ★★★ CRITICAL: AUDIT your output: if any symptom appears in BOTH questions_asked and investigations_required, the output is WRONG.
+    ★★★ CRITICAL: AUDIT your output: if any patient_reportable symptom appears in investigations_required, the output is WRONG.
     - Any symptom requiring equipment/measurement/labs/imaging to detect MUST be investigation_required.
     - Any symptom the patient can directly experience or observe without equipment is patient_reportable.
-    - If uncertain about a symptom's nature, apply the classification rules above; do not guess.
+    - If uncertain about a symptom's nature, default to patient_reportable (it is safer to ask than to skip).
     - Never produce or suggest a final diagnosis in this step.
     - questions_asked must contain no duplicate symptom entries.
     - Each question in questions_asked must end with "?" and be answerable by yes/no only.
@@ -656,7 +655,10 @@ refine_diagnosis_task:
       LOW    — gap == 0 (still tied after all evidence)
 
     All other diseases:
-      MEDIUM — final_score > 0.5 × top_score
+      ★ TIED WITH RANK-1: If final_score == top_score (exact tie with rank-1),
+        assign the SAME confidence as rank-1. Tied diseases must never have
+        HIGHER confidence than the disease they are tied with.
+      MEDIUM — final_score > 0.5 × top_score (and not tied with rank-1)
       LOW    — otherwise
 
     ── Step 5: Transparency ───────────────────────────────────────────
