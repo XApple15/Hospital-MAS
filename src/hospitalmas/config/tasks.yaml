@@ -383,7 +383,36 @@ rank_diagnoses_task:
 
 clarify_followup_symptoms_task:
   description: >
-    You will receive disease_results and differential_diagnosis from prior tasks.
+    You will receive disease_results, differential_diagnosis, AND symp_mappings from prior tasks.
+
+    ══════════════════════════════════════════════════════════════════════
+    CRITICAL — SYMPTOM MAPPING AWARENESS (READ THIS FIRST)
+    ══════════════════════════════════════════════════════════════════════
+
+    The symp_mappings list (from map_symptoms_to_symp_task) tells you how
+    each patient-reported symptom was mapped to its ontology label. This is
+    essential because disease symptom profiles use ontology labels, which
+    may differ from the patient's original wording.
+
+    Example:
+      Patient said: "yellowish skin"  →  mapped to ontology label: "jaundice"
+      Patient said: "belly pain"      →  mapped to ontology label: "abdominal pain"
+      Patient said: "loss of appetite" →  mapped to ontology label: "anorexia"
+
+    BUILD A KNOWN-SYMPTOM SET before filtering:
+    For each entry in symp_mappings with status "mapped":
+      Add BOTH the "symptom" field (patient's original term) AND the
+      "matched_symp_label" field (ontology label) to the known-symptom set.
+      Use case-insensitive comparison.
+
+    When filtering the discriminative symptom pool (Step 3a), a candidate
+    symptom must be removed if it matches ANY entry in the known-symptom set
+    — whether by the patient's original term OR by its ontology label.
+
+    This prevents asking "Do you have jaundice?" when the patient already
+    reported "yellowish skin" (which was mapped to jaundice).
+
+    ══════════════════════════════════════════════════════════════════════
 
     CRITICAL TOOL CONTRACT:
     graphdb_ontology_query is only an execution layer.
@@ -419,8 +448,16 @@ clarify_followup_symptoms_task:
     Step 3 - Build a global discriminative symptom pool.
       Collect every symptom label across all profiled diseases into one pool.
       Then apply these filters IN ORDER:
-        a) Remove symptoms already present in the initial patient message
-           (case-insensitive match against the original extracted symptom names).
+        a) Remove symptoms already present in the KNOWN-SYMPTOM SET.
+           The known-symptom set includes BOTH the patient's original symptom
+           names AND their mapped ontology labels from symp_mappings.
+           Use case-insensitive matching. A symptom is already known if it
+           matches ANY of these (original name OR ontology label).
+           Examples:
+             - "jaundice" in pool → matches mapped label for "yellowish skin" → REMOVE
+             - "abdominal pain" in pool → matches mapped label for "belly pain" → REMOVE
+             - "fever" in pool → matches original name "fever" → REMOVE
+             - "anorexia" in pool → matches mapped label for "loss of appetite" → REMOVE
         b) Remove symptoms that appear in ALL candidate disease profiles
            (they cannot discriminate between diseases).
         c) Score each remaining symptom by discriminative power:
@@ -440,44 +477,24 @@ clarify_followup_symptoms_task:
       - investigation_required, OR
       - patient_reportable
 
-      ★★★ CLASSIFICATION PRIORITY: patient_reportable WINS OVER investigation_required ★★★
-      If a symptom could be classified EITHER way, it is patient_reportable.
-      The question is: "Could a patient notice or feel this WITHOUT medical equipment?"
-      If yes → patient_reportable. Period.
-
-      PATIENT_REPORTABLE classification rule (CHECK THIS FIRST):
-      Apply these checks FIRST. If ANY apply, classify as patient_reportable:
-      1. Patient directly feels/experiences it? (fever, cough, pain, nausea,
-         dizziness, fatigue, drowsiness, confusion, lethargy, sleep disturbance)
-      2. Patient can directly observe it? (bleeding, rash, swelling, dark urine,
-         acholic/pale stool, yellowing skin, hair loss)
-      3. Patient can describe it without equipment? (Yes = patient_reportable)
-      4. It's a subjective symptom or patient-observable sign? (Yes = patient_reportable)
-      5. A caregiver or family member could notice it? (confusion, abnormal behavior,
-         drowsiness, lethargy, personality changes → patient_reportable)
-
-      EXPLICIT PATIENT_REPORTABLE EXAMPLES (never classify these as investigation_required):
-        confusion, drowsiness, lethargy, sleep disturbance, abnormal behavior,
-        dark urine, acholic stool, pale stool, ascites (swollen belly),
-        bleeding, bruising, rash, skin discoloration, appetite changes,
-        weight loss, weight gain, mood changes, memory problems, tremor,
-        numbness, tingling, blurred vision, hearing loss, tinnitus
-
-      INVESTIGATION_REQUIRED classification rule (CHECK ONLY IF NOT patient_reportable):
-      Apply these checks ONLY for symptoms that failed ALL patient_reportable checks above:
+      INVESTIGATION_REQUIRED classification rule:
+      Apply these checks IN ORDER. If ANY apply, classify as investigation_required:
       1. Does it require specialized equipment to detect? (BP cuff, oximeter, ECG, lab machine, imaging)
       2. Is it a measurement/lab value? (e.g., "120/80 mmHg", "glucose 95 mg/dL", "WBC 5K")
       3. Is it a biomarker or lab finding? (enzymes, counts, levels, CRP, liver function tests)
       4. Is it an imaging/radiology result? (X-ray/CT/MRI/ultrasound findings)
-      5. Does it require equipment-based clinical assessment? (heart murmurs via stethoscope,
-         retinal findings via ophthalmoscope, microscopy findings)
-      6. Does the symptom name contain measurement keywords? (pressure, saturation,
+      5. Does it require professional clinical assessment? (heart murmurs detected by stethoscope,
+         retinal findings, some skin signs requiring magnification)
+      6. Does the symptom name contain measurement keywords? (pressure, saturation, heart rate,
          count, enzyme, level, finding, imaging, ECG, EKG, result, test)
 
-      EXPLICIT INVESTIGATION_REQUIRED EXAMPLES (never classify these as patient_reportable):
-        thrombocytopenia, elevated liver enzymes, low platelet count, hypotension,
-        proteinuria, leukocytosis, anemia (lab-confirmed), splenomegaly (imaging),
-        pleural effusion (imaging), heart murmur (auscultation)
+      PATIENT_REPORTABLE classification rule:
+      Apply these checks. If ANY apply, classify as patient_reportable:
+      1. Patient directly feels/experiences it? (fever/feeling hot, cough/coughing, pain/hurt,
+         nausea/feeling sick, dizziness/feeling faint, fatigue/tiredness)
+      2. Patient can directly observe it? (bleeding they see, rash/spots they see, swelling they feel)
+      3. Patient can describe it without equipment? (Yes = patient_reportable)
+      4. It's a subjective symptom or patient-observable sign? (Yes = patient_reportable)
 
       ★★★ MANDATORY SEPARATION STEP ★★★
       STEP B: Create TWO SEPARATE LISTS after classification:
@@ -534,13 +551,11 @@ clarify_followup_symptoms_task:
     - Call graphdb_ontology_query ONLY with SPARQL queries built from URIs in disease_entries.
     - Never invent disease URIs, symptom URIs, or symptom labels.
     - Never ask about a symptom the patient already confirmed.
-    ★★★ CRITICAL: patient_reportable classification WINS when a symptom could go either way.
-    ★★★ CRITICAL: If a patient can feel, experience, or observe it → patient_reportable. No exceptions.
-    ★★★ CRITICAL: confusion, drowsiness, lethargy, sleep disturbance, abnormal behavior,
-    ★★★          dark urine, acholic stool, ascites (swollen belly) are ALL patient_reportable.
-    ★★★ CRITICAL: investigations_required list must contain ONLY investigation_required items.
-    ★★★          Do NOT put patient_reportable items in investigations_required.
-    ★★★          patient_reportable items that are already confirmed go NOWHERE (just skip them).
+    ★★★ CRITICAL: NEVER ask about a symptom whose ontology label matches a patient-reported
+        symptom via symp_mappings. Example: if "yellowish skin" was mapped to "jaundice",
+        do NOT ask about "jaundice" — the patient already reported it under a different name.
+    ★★★ CRITICAL: Build the known-symptom set from BOTH "symptom" AND "matched_symp_label"
+        fields in symp_mappings before filtering the symptom pool.
     ★★★ CRITICAL: Copy SPARQL patterns EXACTLY from graphdb_ontology_query tool description.
     ★★★ CRITICAL: Do NOT add FILTER(LANG(...)) or any filters NOT shown in the patterns.
     ★★★ CRITICAL: Deviating from patterns = zero results = failed queries. Follow patterns exactly.
@@ -549,10 +564,9 @@ clarify_followup_symptoms_task:
     ★★★ CRITICAL: investigation_required symptoms MUST NOT appear in questions_asked under ANY circumstance.
     ★★★ CRITICAL: Do NOT ask about hypotension, shock, thrombocytopenia, or ANY investigation_required finding.
     ★★★ CRITICAL: AUDIT your output: if any symptom appears in BOTH questions_asked and investigations_required, the output is WRONG.
-    ★★★ CRITICAL: AUDIT your output: if any patient_reportable symptom appears in investigations_required, the output is WRONG.
     - Any symptom requiring equipment/measurement/labs/imaging to detect MUST be investigation_required.
     - Any symptom the patient can directly experience or observe without equipment is patient_reportable.
-    - If uncertain about a symptom's nature, default to patient_reportable (it is safer to ask than to skip).
+    - If uncertain about a symptom's nature, apply the classification rules above; do not guess.
     - Never produce or suggest a final diagnosis in this step.
     - questions_asked must contain no duplicate symptom entries.
     - Each question in questions_asked must end with "?" and be answerable by yes/no only.
@@ -576,8 +590,13 @@ clarify_followup_symptoms_task:
       "investigations_required": list of objects:
         "finding": symptom/finding label that should not be asked directly
         "reason": brief reason, e.g. "requires measurement or laboratory/imaging investigation"
+      "known_symptoms_set": list of strings — the full set of symptom terms
+        (both patient-reported names AND their ontology-mapped labels from
+        symp_mappings) that were treated as already-present and excluded
+        from the question pool. This aids debugging and traceability.
       "notes": brief summary — number of diseases profiled, symptoms in pool,
-               questions selected, and any skipped diseases
+               questions selected, skipped diseases, and how many symptoms
+               were excluded via ontology-label matching
   agent: followup_interviewer
 
 refine_diagnosis_task:
@@ -655,10 +674,7 @@ refine_diagnosis_task:
       LOW    — gap == 0 (still tied after all evidence)
 
     All other diseases:
-      ★ TIED WITH RANK-1: If final_score == top_score (exact tie with rank-1),
-        assign the SAME confidence as rank-1. Tied diseases must never have
-        HIGHER confidence than the disease they are tied with.
-      MEDIUM — final_score > 0.5 × top_score (and not tied with rank-1)
+      MEDIUM — final_score > 0.5 × top_score
       LOW    — otherwise
 
     ── Step 5: Transparency ───────────────────────────────────────────

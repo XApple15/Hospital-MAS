@@ -11,10 +11,17 @@ from typing import Any
 
 from hospitalmas.crew import Hospitalmas
 from hospitalmas.tools.graphdb_ontology_query_tool import GraphDbOntologyQueryTool
+from hospitalmas.tools.batch_disease_query_tool import BatchDiseaseQueryTool
 from hospitalmas.answer_collector import (
     AnswerCollector,
     TerminalAnswerCollector,
     normalize_answer,
+)
+from hospitalmas.scoring import (
+    compute_ranking,
+    compute_refinement,
+    deduplicate_symp_mappings,
+    filter_followup_questions,
 )
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
@@ -25,6 +32,7 @@ warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 def _build_runtime_tools() -> list:
     return [
         GraphDbOntologyQueryTool(),
+        BatchDiseaseQueryTool(),
     ]
 
 
@@ -95,37 +103,95 @@ def _parse_json(raw: str) -> dict[str, Any] | None:
 
 def _extract_phase1_payloads(
     crew_result: Any,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[
+    dict[str, Any],  # symp_mappings payload
+    dict[str, Any],  # disease_results payload
+    dict[str, Any],  # followup_payload
+]:
     """
     Walk task outputs and separate:
-      ranking_payload  — has 'differential_diagnosis'
+      symp_payload     — has 'symp_mappings'
+      disease_payload  — has 'disease_results'
       followup_payload — has 'followup_needed' + 'questions_asked'
+
+    NOTE: rank_diagnoses_task is no longer in the crew, so there is no
+    ranking payload to extract. Ranking is computed deterministically.
     """
-    ranking: dict[str, Any] = {}
+    symp: dict[str, Any] = {}
+    disease: dict[str, Any] = {}
     followup: dict[str, Any] = {}
 
     for task_out in getattr(crew_result, "tasks_output", []) or []:
         parsed = _parse_json(getattr(task_out, "raw", ""))
         if not parsed:
             continue
-        if "differential_diagnosis" in parsed:
-            ranking = parsed
+        if "symp_mappings" in parsed:
+            symp = parsed
+        if "disease_results" in parsed:
+            disease = parsed
         if "followup_needed" in parsed and "questions_asked" in parsed:
             followup = parsed
 
-    return ranking, followup
+    return symp, disease, followup
 
 
 # ── Phase 1 ──────────────────────────────────────────────────────────────────
 
-def _run_phase1(user_message: str) -> tuple[Any, dict[str, Any], dict[str, Any]]:
-    """Run Phase 1 once and return raw result plus parsed ranking/follow-up payloads."""
+def _run_phase1(user_message: str) -> tuple[
+    Any,
+    dict[str, Any],  # symp_mappings
+    dict[str, Any],  # disease_results
+    dict[str, Any],  # ranking (computed deterministically)
+    dict[str, Any],  # followup
+]:
+    """
+    Run Phase 1 and return raw result plus parsed payloads.
+
+    The ranking is computed deterministically in Python (not by an LLM agent).
+    SYMP URI deduplication is applied before disease querying results are scored.
+    Follow-up questions are filtered for investigation-required symptoms and
+    already-known symptoms.
+    """
     Hospitalmas.runtime_tools = _build_runtime_tools()
     phase1_result = Hospitalmas().diagnostic_crew().kickoff(
         inputs={"user_message": user_message}
     )
-    ranking_payload, followup_payload = _extract_phase1_payloads(phase1_result)
-    return phase1_result, ranking_payload, followup_payload
+    symp_payload, disease_payload, followup_payload = _extract_phase1_payloads(phase1_result)
+
+    # ── (d) Deduplicate SYMP URIs before scoring ─────────────────────
+    symp_mappings = symp_payload.get("symp_mappings", [])
+    deduped_mappings = deduplicate_symp_mappings(symp_mappings)
+    deduped_uris = {m.get("matched_symp_uri") for m in deduped_mappings if m.get("matched_symp_uri")}
+
+    # Filter disease_results to only include symptoms with deduplicated URIs
+    disease_results = disease_payload.get("disease_results", [])
+    filtered_disease_results = []
+    for entry in disease_results:
+        uri = entry.get("symp_uri")
+        status = entry.get("status", "")
+        if status in ("skipped", "unmapped") or uri in deduped_uris:
+            filtered_disease_results.append(entry)
+        # else: skip — this symptom's URI was a duplicate
+
+    # ── (b) Compute ranking deterministically ────────────────────────
+    print("\n[Scoring] Computing TF-IDF ranking deterministically...\n")
+    ranking_payload = compute_ranking(filtered_disease_results)
+
+    # ── (c) Filter follow-up questions ───────────────────────────────
+    known_symptoms = [s.get("name", "") for s in symp_payload.get("symptoms", [])]
+    # Also include mapped labels as known
+    for m in symp_mappings:
+        label = m.get("matched_symp_label", "")
+        if label:
+            known_symptoms.append(label)
+
+    # Inject ranking into followup payload so downstream has context
+    followup_payload["_ranking"] = ranking_payload
+
+    if followup_payload.get("followup_needed", False):
+        followup_payload = filter_followup_questions(followup_payload, known_symptoms)
+
+    return phase1_result, symp_payload, disease_payload, ranking_payload, followup_payload
 
 
 # ── Phase 2 ──────────────────────────────────────────────────────────────────
@@ -135,27 +201,14 @@ def _run_refine_phase(
     followup_payload: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Kick off the refine_crew with the answered follow-up data baked into the
-    task description.  Returns the refined diagnosis dict.
+    Phase 2: compute refined diagnosis DETERMINISTICALLY.
+
+    The LLM-based refine_crew is no longer used for scoring.
+    All scoring math is done in Python via scoring.compute_refinement().
     """
-    ranking_json = json.dumps(ranking_payload, indent=2, ensure_ascii=True)
-    followup_json = json.dumps(followup_payload, indent=2, ensure_ascii=True)
-
-    hospitalmas = Hospitalmas()
-    hospitalmas.runtime_tools = _build_runtime_tools()
-
-    result = hospitalmas.refine_crew(ranking_json, followup_json).kickoff()
-
-    raw = getattr(result, "raw", str(result))
-    parsed = _parse_json(raw)
-    if parsed and "refined_differential_diagnosis" in parsed:
-        return parsed
-
-    return {
-        "refined_differential_diagnosis": [],
-        "followup_summary": "Refiner did not return valid JSON.",
-        "notes": raw,
-    }
+    print("\n[Scoring] Computing refinement scores deterministically...\n")
+    refined = compute_refinement(ranking_payload, followup_payload)
+    return refined
 
 
 # ── Full pipeline (transport-agnostic) ────────────────────────────────────────
@@ -182,35 +235,33 @@ async def run_diagnostic_pipeline(
     """
     Hospitalmas.runtime_log_file = log_file
 
-    # ── Phase 1: diagnostic pipeline → question generation ────────────
+    # ── Phase 1: diagnostic pipeline → deterministic ranking → filtered questions
     print("\n[Phase 1] Running diagnostic pipeline...\n")
-    phase1_result, ranking_payload, followup_payload = _run_phase1(user_message)
+    (
+        phase1_result,
+        symp_payload,
+        disease_payload,
+        ranking_payload,
+        followup_payload,
+    ) = _run_phase1(user_message)
 
-    if not ranking_payload:
-        raw = getattr(phase1_result, "raw", str(phase1_result))
+    if not ranking_payload or not ranking_payload.get("differential_diagnosis"):
         return {
-            "error": "No ranking payload found in Phase 1 output.",
-            "raw_output": raw,
+            "error": "No diseases found in Phase 1.",
+            "ranking_payload": ranking_payload,
         }
 
     total_diseases = ranking_payload.get("total_diseases_found", 0)
     if total_diseases <= 1:
         return ranking_payload
 
-    if not followup_payload:
-        return ranking_payload
-
-    # ── Check if follow-up produced any questions ─────────────────────
-    questions = followup_payload.get("questions_asked") or []
-    if not questions:
-        print("\n[Phase 2 skipped] No follow-up questions were generated — "
-              "returning Phase 1 ranking as final result.\n")
+    if not followup_payload or not followup_payload.get("followup_needed", False):
         return ranking_payload
 
     # ── Human-in-the-loop: collect patient answers ─────────────────────
     followup_with_answers = await collector.collect(followup_payload)
 
-    # ── Phase 2: refine diagnosis with answers ─────────────────────────
+    # ── Phase 2: deterministic refinement ──────────────────────────────
     print("\n[Phase 2] Refining diagnosis...\n")
     refined = _run_refine_phase(ranking_payload, followup_with_answers)
 

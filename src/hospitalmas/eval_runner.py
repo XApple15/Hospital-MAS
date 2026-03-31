@@ -47,14 +47,22 @@ from typing import Any
 
 from hospitalmas.crew import Hospitalmas
 from hospitalmas.tools.graphdb_ontology_query_tool import GraphDbOntologyQueryTool
+from hospitalmas.tools.batch_disease_query_tool import BatchDiseaseQueryTool
+from hospitalmas.scoring import (
+    compute_ranking,
+    compute_refinement,
+    deduplicate_symp_mappings,
+    filter_followup_questions,
+)
 
 
-# ── Self-contained helpers (avoid fragile imports from main.py) ───────────────
-# These mirror the logic in main.py but live here so eval_runner.py works
-# regardless of how main.py's private names are resolved at import time.
+# ── Self-contained helpers ────────────────────────────────────────────────────
 
 def _build_runtime_tools() -> list:
-    return [GraphDbOntologyQueryTool()]
+    return [
+        GraphDbOntologyQueryTool(),
+        BatchDiseaseQueryTool(),
+    ]
 
 
 def _build_runtime_log_file() -> str:
@@ -85,53 +93,30 @@ def _parse_json(raw: str) -> dict[str, Any] | None:
 
 def _extract_phase1_payloads(
     crew_result: Any,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """
     Walk task outputs and separate:
-      ranking_payload  — has 'differential_diagnosis'
+      symp_payload     — has 'symp_mappings'
+      disease_payload  — has 'disease_results'
       followup_payload — has 'followup_needed' + 'questions_asked'
     """
-    ranking: dict[str, Any] = {}
+    symp: dict[str, Any] = {}
+    disease: dict[str, Any] = {}
     followup: dict[str, Any] = {}
 
     for task_out in getattr(crew_result, "tasks_output", []) or []:
         parsed = _parse_json(getattr(task_out, "raw", ""))
         if not parsed:
             continue
-        if "differential_diagnosis" in parsed:
-            ranking = parsed
+        if "symp_mappings" in parsed:
+            symp = parsed
+        if "disease_results" in parsed:
+            disease = parsed
         if "followup_needed" in parsed and "questions_asked" in parsed:
             followup = parsed
 
-    return ranking, followup
+    return symp, disease, followup
 
-
-def _run_refine_phase(
-    ranking_payload: dict[str, Any],
-    followup_payload: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    Kick off the refine_crew with the answered follow-up data baked into the
-    task description.  Returns the refined diagnosis dict.
-    """
-    ranking_json = json.dumps(ranking_payload, indent=2, ensure_ascii=True)
-    followup_json = json.dumps(followup_payload, indent=2, ensure_ascii=True)
-
-    hospitalmas = Hospitalmas()
-    hospitalmas.runtime_tools = _build_runtime_tools()
-
-    result = hospitalmas.refine_crew(ranking_json, followup_json).kickoff()
-
-    raw = getattr(result, "raw", str(result))
-    parsed = _parse_json(raw)
-    if parsed and "refined_differential_diagnosis" in parsed:
-        return parsed
-
-    return {
-        "refined_differential_diagnosis": [],
-        "followup_summary": "Refiner did not return valid JSON.",
-        "notes": raw,
-    }
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -152,27 +137,18 @@ def _symptom_matches(question_symptom: str, known_symptom: str) -> bool:
     Check whether a follow-up question symptom matches one of the known
     ground-truth symptoms from the CSV.  Uses normalised fuzzy matching
     to bridge ontology labels vs CSV underscore-separated names.
-
-    Examples:
-        "skin rash"      ↔ "skin_rash"        → True
-        "high fever"     ↔ "high_fever"        → True
-        "excessive hunger" ↔ "excessive_hunger" → True
-        "headache"       ↔ "headache"          → True
     """
     def _norm(s: str) -> str:
         return re.sub(r"[^a-z0-9]", "", s.strip().lower())
 
-    # Direct normalised match
     if _norm(question_symptom) == _norm(known_symptom):
         return True
 
-    # Underscore-to-space match
     q_tokens = set(re.split(r"[_\s\-]+", question_symptom.strip().lower()))
     k_tokens = set(re.split(r"[_\s\-]+", known_symptom.strip().lower()))
     if q_tokens and k_tokens and q_tokens == k_tokens:
         return True
 
-    # Subset containment (e.g. "fever" in {"high", "fever"})
     if q_tokens and k_tokens:
         if q_tokens.issubset(k_tokens) or k_tokens.issubset(q_tokens):
             return True
@@ -186,11 +162,8 @@ def _auto_answer_followup(
 ) -> dict[str, Any]:
     """
     Simulate a patient answering follow-up questions.
-
-    For each question in questions_asked, check if the symptom matches any
-    of the known ground-truth symptoms. If yes → "yes", otherwise → "no".
-
-    This replaces the interactive _collect_answers() from main.py.
+    For each question, check if the symptom matches any known ground-truth
+    symptoms. If yes → "yes", otherwise → "no".
     """
     if not followup_payload.get("followup_needed", False):
         return followup_payload
@@ -199,7 +172,6 @@ def _auto_answer_followup(
     for q in questions:
         if not isinstance(q, dict):
             continue
-        # Skip already-answered questions
         if (q.get("patient_answer") or "").strip():
             continue
 
@@ -224,28 +196,6 @@ def _evaluate_single_case(
 ) -> dict[str, Any]:
     """
     Run one patient case through the full pipeline and return a result dict.
-
-    Returns:
-        {
-            "case_id": int,
-            "variant": str,
-            "expected_prognosis": str,
-            "known_symptoms": [...],
-            "phase1_top1": str | None,
-            "phase1_top3": [str, ...],
-            "phase1_ranking": [...],
-            "phase2_top1": str | None,
-            "phase2_top3": [str, ...],
-            "phase2_ranking": [...],
-            "followup_questions_count": int,
-            "followup_auto_answers": {...},
-            "top1_correct_phase1": bool,
-            "top3_correct_phase1": bool,
-            "top1_correct_phase2": bool,
-            "top3_correct_phase2": bool,
-            "error": str | None,
-            "duration_seconds": float,
-        }
     """
     import time
 
@@ -284,23 +234,42 @@ def _evaluate_single_case(
         else:
             Hospitalmas.runtime_log_file = _build_runtime_log_file()
 
-        # ── Phase 1 ──────────────────────────────────────────────────────
+        # ── Phase 1: Run crew (sequential, no orchestrator) ──────────────
         phase1_result = Hospitalmas().diagnostic_crew().kickoff(
             inputs={"user_message": user_message}
         )
-        ranking_payload, followup_payload = _extract_phase1_payloads(phase1_result)
+        symp_payload, disease_payload, followup_payload = _extract_phase1_payloads(phase1_result)
 
-        if not ranking_payload:
-            result["error"] = "No ranking payload in Phase 1 output"
+        # ── (d) Deduplicate SYMP URIs ────────────────────────────────────
+        symp_mappings = symp_payload.get("symp_mappings", [])
+        deduped_mappings = deduplicate_symp_mappings(symp_mappings)
+        deduped_uris = {
+            m.get("matched_symp_uri")
+            for m in deduped_mappings
+            if m.get("matched_symp_uri")
+        }
+
+        disease_results = disease_payload.get("disease_results", [])
+        filtered_disease_results = []
+        for entry in disease_results:
+            uri = entry.get("symp_uri")
+            status = entry.get("status", "")
+            if status in ("skipped", "unmapped") or uri in deduped_uris:
+                filtered_disease_results.append(entry)
+
+        # ── (b) Compute ranking deterministically ────────────────────────
+        ranking_payload = compute_ranking(filtered_disease_results)
+
+        if not ranking_payload or not ranking_payload.get("differential_diagnosis"):
+            result["error"] = "No ranking payload: no diseases found"
             result["duration_seconds"] = time.time() - start
             return result
 
         # Extract Phase 1 rankings
         diff_diag = ranking_payload.get("differential_diagnosis", [])
-        sorted_diag = sorted(diff_diag, key=lambda d: d.get("rank", 999))
-        phase1_diseases = [d.get("disease", "") for d in sorted_diag]
+        phase1_diseases = [d.get("disease", "") for d in diff_diag]
 
-        result["phase1_ranking"] = sorted_diag
+        result["phase1_ranking"] = diff_diag
         result["phase1_top1"] = phase1_diseases[0] if phase1_diseases else None
         result["phase1_top3"] = phase1_diseases[:3]
         result["top1_correct_phase1"] = _disease_match(
@@ -310,10 +279,21 @@ def _evaluate_single_case(
             _disease_match(d, expected_prognosis) for d in result["phase1_top3"]
         )
 
+        # ── (c) Filter follow-up questions ───────────────────────────────
+        extracted_symptoms = [s.get("name", "") for s in symp_payload.get("symptoms", [])]
+        mapped_labels = [
+            m.get("matched_symp_label", "")
+            for m in symp_mappings
+            if m.get("matched_symp_label")
+        ]
+        all_known = extracted_symptoms + mapped_labels
+
+        if followup_payload.get("followup_needed", False):
+            followup_payload = filter_followup_questions(followup_payload, all_known)
+
         # ── Check if follow-up is needed ─────────────────────────────────
         total_diseases = ranking_payload.get("total_diseases_found", 0)
-        if total_diseases <= 1 or not followup_payload:
-            # No Phase 2 needed — copy Phase 1 results to Phase 2
+        if total_diseases <= 1 or not followup_payload.get("followup_needed", False):
             result["phase2_top1"] = result["phase1_top1"]
             result["phase2_top3"] = result["phase1_top3"]
             result["phase2_ranking"] = result["phase1_ranking"]
@@ -334,25 +314,13 @@ def _evaluate_single_case(
             if isinstance(q, dict)
         }
 
-        # ── Skip Phase 2 if no questions were generated ──────────────────
-        if not questions:
-            # No follow-up questions → Phase 2 would be a no-op, skip it
-            result["phase2_top1"] = result["phase1_top1"]
-            result["phase2_top3"] = result["phase1_top3"]
-            result["phase2_ranking"] = result["phase1_ranking"]
-            result["top1_correct_phase2"] = result["top1_correct_phase1"]
-            result["top3_correct_phase2"] = result["top3_correct_phase1"]
-            result["duration_seconds"] = time.time() - start
-            return result
-
-        # ── Phase 2 ─────────────────────────────────────────────────────
-        refined = _run_refine_phase(ranking_payload, followup_with_answers)
+        # ── (b) Phase 2: Deterministic refinement ────────────────────────
+        refined = compute_refinement(ranking_payload, followup_with_answers)
 
         refined_diag = refined.get("refined_differential_diagnosis", [])
-        sorted_refined = sorted(refined_diag, key=lambda d: d.get("rank", 999))
-        phase2_diseases = [d.get("disease", "") for d in sorted_refined]
+        phase2_diseases = [d.get("disease", "") for d in refined_diag]
 
-        result["phase2_ranking"] = sorted_refined
+        result["phase2_ranking"] = refined_diag
         result["phase2_top1"] = phase2_diseases[0] if phase2_diseases else None
         result["phase2_top3"] = phase2_diseases[:3]
         result["top1_correct_phase2"] = _disease_match(
@@ -372,7 +340,6 @@ def _evaluate_single_case(
 def _disease_match(predicted: str | None, expected: str) -> bool:
     """
     Fuzzy case-insensitive match between predicted disease and expected prognosis.
-    Handles minor whitespace/punctuation differences.
     """
     if not predicted:
         return False
@@ -380,7 +347,6 @@ def _disease_match(predicted: str | None, expected: str) -> bool:
     norm_exp = re.sub(r"[^a-z0-9]", "", expected.strip().lower())
     if norm_pred == norm_exp:
         return True
-    # Containment check for partial matches (e.g. "diabetes mellitus" vs "diabetes")
     if norm_pred in norm_exp or norm_exp in norm_pred:
         return True
     return False
@@ -394,19 +360,7 @@ def load_test_cases(
     prognosis_filter: str | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Load and prepare test cases from Patient_Cases.csv.
-
-    Args:
-        csv_path: Path to the CSV file.
-        variant_filter: "100", "80", "50", or None for all.
-        prognosis_filter: Filter by expected prognosis (case-insensitive substring).
-        limit: Max number of (case, variant) pairs to return.
-
-    Returns:
-        List of dicts with keys:
-            case_id, variant, expected_prognosis, known_symptoms, user_message
-    """
+    """Load and prepare test cases from Patient_Cases.csv."""
     csv_path = Path(csv_path)
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
@@ -462,11 +416,7 @@ def run_evaluation(
     output_path: str | Path | None = None,
     log_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """
-    Run the full batch evaluation and write results to JSON.
-
-    Returns the complete evaluation report dict.
-    """
+    """Run the full batch evaluation and write results to JSON."""
     cases = load_test_cases(csv_path, variant_filter, prognosis_filter, limit)
     total = len(cases)
 
@@ -638,7 +588,6 @@ def _print_summary(summary: dict[str, Any]) -> None:
     print(f"  Avg duration:          {summary.get('avg_duration_seconds', 0):.1f}s")
     print(f"  Avg follow-up Qs:      {summary.get('avg_followup_questions', 0):.1f}")
 
-    # Per-variant
     for var_key in ["100", "80", "50"]:
         count_key = f"variant_{var_key}_count"
         if count_key in summary:

@@ -48,6 +48,13 @@ symptom_extractor:
     Body locations are BANNED inside "name". Move them to "location":
       on arms, in neck, left knee, right upper quadrant, etc.
 
+    IMPORTANT: stripping modifiers/location does NOT mean collapsing a symptom
+    to anatomy-only text.
+    Forbidden:
+      "yellowing skin" → "skin"
+      "yellow eyes" → "eyes"
+      "joint pain" → "joint"
+
     ── MANDATORY NAME-TO-ONTOLOGY MAPPING TABLE ─────────────────────
 
     When the patient text contains any of these phrases, the "name" MUST be
@@ -65,8 +72,10 @@ symptom_extractor:
       "excessive sweating"      → name: "sweating"     notes: "excessive"
       "significant weight loss" → name: "weight loss"  notes: "significant"
       "noticeable swelling"     → name: "swelling"     notes: "noticeable"
-      "yellowish skin"          → name: "yellowish skin"
-      "yellowing of eyes"       → name: "yellowing of eyes"
+      "yellowing skin"          → name: "yellow skin"
+      "yellowish skin"          → name: "yellow skin"
+      "yellowing of eyes"       → name: "yellow eyes"
+      "yellowing skin and eyes" → two entries: "yellow skin" + "yellow eyes"
       "loss of appetite"        → name: "loss of appetite"
       "swollen lymph nodes"     → name: "swollen lymph nodes"
       "blurred vision"          → name: "blurred and distorted vision"
@@ -92,14 +101,7 @@ symptom_extractor:
     Split multi-symptom phrases into separate entries:
       "nausea and vomiting" → {"name": "nausea"} + {"name": "vomiting"}
       "fever and chills"    → {"name": "fever"}  + {"name": "chills"}
-
-    ── CLINICAL FINDINGS → SYMPTOM DERIVATION ────────────────────────
-
-    When the text mentions a clinical condition/finding (e.g. "signs of
-    acute liver failure"), derive its observable symptom components:
-      "acute liver failure" → "liver inflammation" + "dark urine" + "jaundice"
-    Only add derived symptoms not already in the list.
-    Mark derived entries with notes: "derived from: <original phrase>"
+      "yellowing skin and eyes" → {"name": "yellow skin"} + {"name": "yellow eyes"}
 
     ── MANDATORY SELF-CHECK (run before output) ─────────────────────
 
@@ -108,6 +110,9 @@ symptom_extractor:
       2. Does "name" contain a severity/appearance adjective from the banned list? → Strip it to "notes".
       3. Does "name" contain a body part that is not part of the base term? → Strip it to "location".
       4. Would this exact "name" string appear as an rdfs:label in the SYMP ontology? → If unsure, use the shorter form.
+
+    Additional mandatory check:
+      5. Did you collapse to anatomy-only text ("skin", "eyes", "joint")? → WRONG. Restore a symptom phrase.
 
     If ANY answer triggers a change, fix it before outputting.
 
@@ -127,6 +132,7 @@ symp_mapper:
     - You must build the query yourself; the tool does not infer intent.
     - Use the tool description as your source of query-construction guidance.
     - Call graphdb_ontology_query for every symptom.
+    - Never collapse a symptom into anatomy-only text ("skin", "eyes", "joint").
     - Do not invent URI, label, or parsed_symp_number values.
     - If tool fails, retry up to 2 times before marking unmapped.
 
@@ -140,21 +146,52 @@ symp_mapper:
       "severe headache" → search "headache"
       "skin rash with red spots" → search "rash"
       "dark concentrated urine" → search "dark urine"
+      "yellowing skin" → search "yellow skin" (never "skin")
+
+    For conjunction normalization before lookup:
+      "yellowing skin and eyes" → split and map separately as
+      "yellow skin" and "yellow eyes"
 
     Strategy 2 — Try the root/base term only:
       "joint pain" → search "pain"
       "muscle weakness" → search "weakness"
       "swollen lymph nodes" → search "lymph node" or "lymphadenopathy"
 
-    Strategy 3 — Try a clinical synonym:
-      "loss of appetite" → also try "anorexia"
-      "swollen lymph nodes" → also try "lymphadenopathy"
-      "shortness of breath" → also try "dyspnea"
-      "red spots" → also try "rash" or "exanthem"
-      "belly pain" → also try "abdominal pain"
+    
 
     You MUST attempt at least 2 retries with simplified/synonym queries before
-    marking any symptom as unmapped.
+    using the HP ontology fallback.
+
+    ★★★ STRATEGY 3 — HP ONTOLOGY FALLBACK (use after Strategies 1-2 fail) ★★★
+
+    If all SYMP retries (Strategies 1-2) return no results, use the
+    hp_ontology_query tool to search the Human Phenotype (HP) Ontology:
+
+    Step A: Call hp_ontology_query with the symptom text:
+      {"search_term": "<symptom name>"}
+
+    Step B: Read the suggested_symp_search_terms from the HP tool response.
+      These are HP ontology labels that describe the same or similar phenotype
+      using different terminology that SYMP may recognize.
+
+    Step C: For each suggested term from HP, retry a SYMP search using
+      graphdb_ontology_query with a PATTERN 1 query using the HP label as
+      the search text.
+
+    Step D: If any SYMP match is found via HP-suggested terms, use it.
+      If still no match after trying all HP suggestions, mark as unmapped.
+
+    Example workflow:
+      1. Search SYMP for "passage of gases" → no results
+      2. Try SYMP simplifications: "gases", "gas" → no results
+      3. Call hp_ontology_query: {"search_term": "passage of gases"}
+         → returns suggested_symp_search_terms: ["flatulence", "increased flatus"]
+      4. Search SYMP for "flatulence" → FOUND! Use this SYMP mapping.
+
+    RULES for HP fallback:
+    - HP URIs are NOT SYMP URIs. Never use an HP URI as a SYMP mapping.
+    - Use HP labels ONLY as search terms to retry SYMP lookups.
+    - The final mapping must always be a SYMP URI from graphdb_ontology_query.
 
 disease_mapper:
   llm: gpt-4.1-mini
@@ -221,27 +258,16 @@ diagnosis_refiner:
   role: >
     Final Diagnostic Reasoning Specialist
   goal: >
-    Use the refine_scoring tool to compute exact scores and confidence tiers,
-    then write transparent evidence-based reasoning for the refined differential
-    diagnosis.
+    Re-rank disease candidates using the composite_score baseline plus
+    weighted patient follow-up answers to produce a refined differential
+    diagnosis with transparent, evidence-based reasoning.
   backstory: >
     You receive the initial differential_diagnosis (with composite_scores)
     and the completed questions_asked list with patient_answer fields filled in.
-
-    ★★★ CRITICAL: You MUST call the refine_scoring tool to compute all
-    numeric values. Do NOT perform any arithmetic yourself. ★★★
-
-    Your workflow:
-    1. Call refine_scoring with the initial ranking JSON and follow-up JSON
-    2. Read the tool's returned scores, ranks, and confidence tiers
-    3. For each disease, write a reasoning narrative using the tool's
-       per_disease_details (confirmed/denied symptoms and their weights)
-    4. Write the followup_summary using the tool's most_impactful_answer
-
-    You NEVER calculate scores, deltas, or confidence tiers yourself.
-    You copy ALL numeric values from the tool result exactly as returned.
-    Your only creative task is writing clear reasoning narratives that
-    explain the numbers the tool computed.
-
+    You apply weighted follow-up evidence: symptoms that are more discriminative
+    (appear in fewer candidate disease profiles) carry more weight when
+    confirmed or denied by the patient.
+    You use follow-up answers as the ONLY post-baseline evidence source.
     You never invent new diseases or symptoms. An unchanged ranking with
     an honest explanation is always correct over an invented re-rank.
+    You round all scores to 3 decimal places.

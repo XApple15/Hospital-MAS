@@ -6,8 +6,6 @@ from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 
-from hospitalmas.tools.refine_scoring_tool import RefineScoring
-
 
 @CrewBase
 class Hospitalmas():
@@ -16,14 +14,17 @@ class Hospitalmas():
 
     Phase 1  (diagnostic_crew):
         symptom_extractor → symp_mapper → disease_mapper →
-        diagnosis_ranker  → followup_interviewer
-        Ends by returning a list of yes/no follow-up questions.
-        main.py pauses here and presents them to the patient.
+        followup_interviewer
+        Runs sequentially (no orchestrator).
+        Ranking is computed deterministically in Python after the crew finishes.
+        Ends by returning disease_results + follow-up questions.
+        main.py pauses here for human input.
 
     Phase 2  (refine_crew):
         diagnosis_refiner
         Receives initial ranking + answered questions via task description
         and returns the refined differential diagnosis.
+        Scoring is also computed deterministically in Python.
     """
 
     agents: list[BaseAgent]
@@ -33,17 +34,7 @@ class Hospitalmas():
     runtime_log_file: str | None = None
 
     # ── Agents ───────────────────────────────────────────────────────────────
-
-    @agent
-    def orchestrator(self) -> Agent:
-        return Agent(
-            config=self.agents_config['orchestrator'],
-            tools=[],
-            verbose=True,
-            allow_delegation=True,
-            max_iter=20,
-            max_retry_limit=2,
-        )
+    # NOTE: orchestrator has been removed. Pipeline uses Process.sequential.
 
     @agent
     def symptom_extractor(self) -> Agent:
@@ -73,9 +64,13 @@ class Hospitalmas():
 
     @agent
     def disease_mapper(self) -> Agent:
+        # Give the disease mapper BOTH tools: individual and batch query
         ontology_tools = [
             t for t in self.runtime_tools
-            if getattr(t, "name", "") == "graphdb_ontology_query"
+            if getattr(t, "name", "") in (
+                "graphdb_ontology_query",
+                "batch_disease_query",
+            )
         ]
         return Agent(
             config=self.agents_config['disease_mapper'],
@@ -84,17 +79,6 @@ class Hospitalmas():
             allow_delegation=False,
             max_iter=20,
             max_retry_limit=2,
-        )
-
-    @agent
-    def diagnosis_ranker(self) -> Agent:
-        return Agent(
-            config=self.agents_config['diagnosis_ranker'],
-            tools=[],
-            verbose=True,
-            allow_delegation=False,
-            max_iter=3,
-            max_retry_limit=1,
         )
 
     @agent
@@ -116,7 +100,7 @@ class Hospitalmas():
     def diagnosis_refiner(self) -> Agent:
         return Agent(
             config=self.agents_config['diagnosis_refiner'],
-            tools=[RefineScoring()],
+            tools=[],
             verbose=True,
             allow_delegation=False,
             max_iter=4,
@@ -149,14 +133,6 @@ class Hospitalmas():
         )
 
     @task
-    def rank_diagnoses_task(self) -> Task:
-        return Task(
-            config=self.tasks_config['rank_diagnoses_task'],
-            agent=self.diagnosis_ranker(),
-            context=[self.query_diseases_for_symptoms_task()],
-        )
-
-    @task
     def clarify_followup_symptoms_task(self) -> Task:
         return Task(
             config=self.tasks_config['clarify_followup_symptoms_task'],
@@ -164,7 +140,6 @@ class Hospitalmas():
             context=[
                 self.extract_symptoms_task(),
                 self.query_diseases_for_symptoms_task(),
-                self.rank_diagnoses_task(),
             ],
         )
 
@@ -201,26 +176,31 @@ class Hospitalmas():
 
     def diagnostic_crew(self) -> Crew:
         """
-        Phase 1: full diagnostic pipeline up to and including question generation.
-        Does NOT include the refiner — main.py pauses here for human input.
+        Phase 1: diagnostic pipeline (sequential, no orchestrator).
+
+        Runs: symptom extraction → SYMP mapping → disease mapping →
+              follow-up question generation.
+
+        NOTE: The rank_diagnoses_task has been removed from the crew.
+        Ranking is now computed deterministically in Python by main.py
+        after this crew finishes, using scoring.compute_ranking().
+        The followup_interviewer receives disease_results directly
+        and the ranking is injected into its context by the pipeline.
         """
         return Crew(
             agents=[
                 self.symptom_extractor(),
                 self.symp_mapper(),
                 self.disease_mapper(),
-                self.diagnosis_ranker(),
                 self.followup_interviewer(),
             ],
             tasks=[
                 self.extract_symptoms_task(),
                 self.map_symptoms_to_symp_task(),
                 self.query_diseases_for_symptoms_task(),
-                self.rank_diagnoses_task(),
                 self.clarify_followup_symptoms_task(),
             ],
-            process=Process.hierarchical,
-            manager_agent=self.orchestrator(),
+            process=Process.sequential,
             verbose=True,
             max_rpm=5,
             output_log_file=self.runtime_log_file,
